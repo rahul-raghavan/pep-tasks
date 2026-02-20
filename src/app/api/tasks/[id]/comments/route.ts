@@ -13,14 +13,14 @@ export async function GET(
 
   const db = createServiceRoleClient();
 
-  // Check access for staff
+  // Check access for staff — allow if assigned_to or delegated_to
   if (user.role === 'staff') {
     const { data: task } = await db
       .from('pep_tasks')
-      .select('assigned_to')
+      .select('assigned_to, delegated_to')
       .eq('id', id)
       .single();
-    if (!task || task.assigned_to !== user.id) {
+    if (!task || (task.assigned_to !== user.id && task.delegated_to !== user.id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }
@@ -59,14 +59,14 @@ export async function POST(
 
   const db = createServiceRoleClient();
 
-  // Check access for staff
+  // Check access for staff — allow if assigned_to or delegated_to
   if (user.role === 'staff') {
     const { data: task } = await db
       .from('pep_tasks')
-      .select('assigned_to')
+      .select('assigned_to, delegated_to')
       .eq('id', id)
       .single();
-    if (!task || task.assigned_to !== user.id) {
+    if (!task || (task.assigned_to !== user.id && task.delegated_to !== user.id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }

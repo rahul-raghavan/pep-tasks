@@ -16,11 +16,13 @@ CREATE TABLE IF NOT EXISTS pep_users (
 );
 
 -- RLS for pep_users
+-- All app queries go through service_role client; authenticated users
+-- should NOT access tables directly via Supabase REST.
 ALTER TABLE pep_users ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read pep_users"
+CREATE POLICY "Authenticated users can read own profile"
   ON pep_users FOR SELECT
-  TO authenticated USING (true);
+  TO authenticated USING (auth.uid() = auth_id);
 
 CREATE POLICY "Service role can manage pep_users"
   ON pep_users FOR ALL
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS pep_tasks (
   priority TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('urgent', 'high', 'normal', 'low')),
   assigned_to UUID REFERENCES pep_users(id),
   assigned_by UUID REFERENCES pep_users(id),
+  delegated_to UUID REFERENCES pep_users(id),
   due_date DATE,
   completed_at TIMESTAMPTZ,
   verified_by UUID REFERENCES pep_users(id),
@@ -48,9 +51,12 @@ CREATE TABLE IF NOT EXISTS pep_tasks (
 
 ALTER TABLE pep_tasks ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read pep_tasks"
+CREATE POLICY "Authenticated users can read own assigned or delegated tasks"
   ON pep_tasks FOR SELECT
-  TO authenticated USING (true);
+  TO authenticated USING (
+    assigned_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+    OR delegated_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+  );
 
 CREATE POLICY "Service role can manage pep_tasks"
   ON pep_tasks FOR ALL
@@ -71,9 +77,13 @@ CREATE TABLE IF NOT EXISTS pep_comments (
 
 ALTER TABLE pep_comments ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read pep_comments"
+CREATE POLICY "Authenticated users can read comments on own tasks"
   ON pep_comments FOR SELECT
-  TO authenticated USING (true);
+  TO authenticated USING (task_id IN (
+    SELECT id FROM pep_tasks WHERE
+      assigned_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+      OR delegated_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+  ));
 
 CREATE POLICY "Service role can manage pep_comments"
   ON pep_comments FOR ALL
@@ -94,9 +104,13 @@ CREATE TABLE IF NOT EXISTS pep_activity_log (
 
 ALTER TABLE pep_activity_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read pep_activity_log"
+CREATE POLICY "Authenticated users can read activity on own tasks"
   ON pep_activity_log FOR SELECT
-  TO authenticated USING (true);
+  TO authenticated USING (task_id IN (
+    SELECT id FROM pep_tasks WHERE
+      assigned_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+      OR delegated_to IN (SELECT id FROM pep_users WHERE auth_id = auth.uid())
+  ));
 
 CREATE POLICY "Service role can manage pep_activity_log"
   ON pep_activity_log FOR ALL
@@ -107,6 +121,7 @@ CREATE POLICY "Service role can manage pep_activity_log"
 -- Indexes
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_pep_tasks_assigned_to ON pep_tasks(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_pep_tasks_delegated_to ON pep_tasks(delegated_to);
 CREATE INDEX IF NOT EXISTS idx_pep_tasks_status ON pep_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_pep_tasks_due_date ON pep_tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_pep_comments_task_id ON pep_comments(task_id);
@@ -135,9 +150,11 @@ CREATE TABLE IF NOT EXISTS pep_recurring_tasks (
 
 ALTER TABLE pep_recurring_tasks ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read pep_recurring_tasks"
+CREATE POLICY "Authenticated users can read own recurring tasks"
   ON pep_recurring_tasks FOR SELECT
-  TO authenticated USING (true);
+  TO authenticated USING (assigned_to IN (
+    SELECT id FROM pep_users WHERE auth_id = auth.uid()
+  ));
 
 CREATE POLICY "Service role can manage pep_recurring_tasks"
   ON pep_recurring_tasks FOR ALL

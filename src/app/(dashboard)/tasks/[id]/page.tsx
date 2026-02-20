@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
-import { isAdmin, canVerifyTasks } from '@/lib/permissions';
+import { isAdmin, canVerifyTasks, canDelegate, canDelegateTo } from '@/lib/permissions';
 import { isOverdue as checkOverdue } from '@/lib/utils';
-import { PepTask, PepComment, PepActivityLog, TaskStatus } from '@/types/database';
+import { PepTask, PepComment, PepActivityLog, PepUser, TaskStatus } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,14 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { ArrowLeft, Clock, User, CalendarDays, Flag, Send } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { ArrowLeft, Clock, User, UserPlus, CalendarDays, Flag, Send } from 'lucide-react';
 import { format } from 'date-fns';
 import { STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
 
@@ -26,6 +33,10 @@ function formatActivityAction(log: PepActivityLog): string {
       return `changed status from ${(details.from as string || '').replace('_', ' ')} to ${(details.to as string || '').replace('_', ' ')}`;
     case 'commented':
       return 'posted a comment';
+    case 'delegated':
+      return `delegated this task to ${(details.to_name as string) || 'a staff member'}`;
+    case 'undelegated':
+      return 'removed delegation from this task';
     case 'updated': {
       const parts: string[] = [];
       if (details.reassigned) parts.push('reassigned the task');
@@ -52,6 +63,8 @@ export default function TaskDetailPage() {
   const [updating, setUpdating] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
+  const [staffUsers, setStaffUsers] = useState<PepUser[]>([]);
+  const [delegating, setDelegating] = useState(false);
 
   const fetchTask = useCallback(async () => {
     const res = await fetch(`/api/tasks/${taskId}`);
@@ -77,7 +90,15 @@ export default function TaskDetailPage() {
     Promise.all([fetchTask(), fetchComments(), fetchActivity()]).then(() =>
       setLoading(false)
     );
-  }, [fetchTask, fetchComments, fetchActivity]);
+    // Fetch staff users for delegation dropdown (admin+ only)
+    if (isAdmin(user.role)) {
+      fetch('/api/users')
+        .then((r) => r.json())
+        .then((users: PepUser[]) =>
+          setStaffUsers(users.filter((u) => u.role === 'staff' && u.is_active))
+        );
+    }
+  }, [fetchTask, fetchComments, fetchActivity, user.role]);
 
   async function updateStatus(newStatus: TaskStatus) {
     setUpdating(true);
@@ -116,6 +137,40 @@ export default function TaskDetailPage() {
       toast.error(err.error || 'Failed to post comment');
     }
     setPosting(false);
+  }
+
+  async function handleDelegate(delegateId: string) {
+    setDelegating(true);
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delegated_to: delegateId }),
+    });
+    if (res.ok) {
+      toast.success('Task delegated');
+      await Promise.all([fetchTask(), fetchActivity()]);
+    } else {
+      const err = await res.json();
+      toast.error(err.error || 'Failed to delegate');
+    }
+    setDelegating(false);
+  }
+
+  async function handleUndelegate() {
+    setDelegating(true);
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delegated_to: null }),
+    });
+    if (res.ok) {
+      toast.success('Delegation removed');
+      await Promise.all([fetchTask(), fetchActivity()]);
+    } else {
+      const err = await res.json();
+      toast.error(err.error || 'Failed to remove delegation');
+    }
+    setDelegating(false);
   }
 
   function getAvailableActions(): {
@@ -223,6 +278,57 @@ export default function TaskDetailPage() {
         </div>
       )}
 
+      {/* Delegation Controls */}
+      {task && canDelegate(user.role, user.id, task.assigned_to) && staffUsers.length > 0 && (
+        <div className="flex items-center gap-3 flex-wrap">
+          {task.delegated_to ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUndelegate}
+                disabled={delegating}
+              >
+                Remove Delegation
+              </Button>
+              <Select
+                onValueChange={handleDelegate}
+                disabled={delegating}
+              >
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Re-delegate to..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {staffUsers
+                    .filter((u) => u.id !== task.delegated_to)
+                    .map((u) => (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.name || u.email.split('@')[0]}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </>
+          ) : (
+            <Select
+              onValueChange={handleDelegate}
+              disabled={delegating}
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Delegate to..." />
+              </SelectTrigger>
+              <SelectContent>
+                {staffUsers.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>
+                    {u.name || u.email.split('@')[0]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
+      )}
+
       {/* Task Details */}
       <Card>
         <CardContent className="pt-6 space-y-4">
@@ -259,6 +365,16 @@ export default function TaskDetailPage() {
                   : 'Unknown'}
               </span>
             </div>
+
+            {task.delegate && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <UserPlus className="w-4 h-4" />
+                <span>Delegated to: </span>
+                <span className="font-medium text-foreground">
+                  {task.delegate.name || task.delegate.email.split('@')[0]}
+                </span>
+              </div>
+            )}
 
             <div className="flex items-center gap-2 text-muted-foreground">
               <CalendarDays className="w-4 h-4" />

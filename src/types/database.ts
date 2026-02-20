@@ -23,6 +23,7 @@ export interface PepTask {
   priority: TaskPriority;
   assigned_to: string | null;
   assigned_by: string | null;
+  delegated_to: string | null;
   due_date: string | null;
   completed_at: string | null;
   verified_by: string | null;
@@ -32,6 +33,7 @@ export interface PepTask {
   // Joined fields
   assignee?: PepUser;
   assigner?: PepUser;
+  delegate?: PepUser;
 }
 
 export interface PepComment {

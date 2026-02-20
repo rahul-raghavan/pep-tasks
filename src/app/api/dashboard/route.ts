@@ -24,7 +24,7 @@ export async function GET() {
     .from('pep_tasks')
     .select('id', { count: 'exact', head: true })
     .in('status', ['open', 'in_progress']);
-  if (isStaff) openQuery = openQuery.eq('assigned_to', user.id);
+  if (isStaff) openQuery = openQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
 
   // Due this week
   let weekQuery = db
@@ -33,7 +33,7 @@ export async function GET() {
     .in('status', ['open', 'in_progress'])
     .gte('due_date', weekStart)
     .lte('due_date', weekEnd);
-  if (isStaff) weekQuery = weekQuery.eq('assigned_to', user.id);
+  if (isStaff) weekQuery = weekQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
 
   // Overdue
   let overdueQuery = db
@@ -41,18 +41,18 @@ export async function GET() {
     .select('id', { count: 'exact', head: true })
     .in('status', ['open', 'in_progress'])
     .lt('due_date', today);
-  if (isStaff) overdueQuery = overdueQuery.eq('assigned_to', user.id);
+  if (isStaff) overdueQuery = overdueQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
 
   // Timeline: recent status changes
   let timelinePromise: Promise<TimelineItem[]>;
 
   if (isStaff) {
-    // Two-step: get task IDs assigned to user, then filter activity
+    // Two-step: get task IDs assigned to or delegated to user, then filter activity
     timelinePromise = (async () => {
       const { data: taskRows } = await db
         .from('pep_tasks')
         .select('id')
-        .eq('assigned_to', user.id);
+        .or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
       const taskIds = (taskRows || []).map((t: { id: string }) => t.id);
       if (taskIds.length === 0) return [];
 

@@ -181,6 +181,12 @@ export default function TasksPage() {
                         {task.assignee.name || task.assignee.email.split('@')[0]}
                       </span>
                     )}
+                    {task.delegate && (
+                      <span className="text-muted-foreground">
+                        Delegated to{' '}
+                        {task.delegate.name || task.delegate.email.split('@')[0]}
+                      </span>
+                    )}
                     {task.due_date && (
                       <span className={isTaskOverdue(task) ? 'text-[#D4705A] font-medium' : ''}>
                         Due {format(new Date(task.due_date), 'MMM d, yyyy')}

@@ -3,7 +3,7 @@ import { createServiceRoleClient } from '@/lib/supabase/server';
 import { PepUser } from '@/types/database';
 
 // Re-export permissions for convenience in server code
-export { isAdmin, canAssignTo, canCreateUser, canVerifyTasks, canViewReportsFor } from '@/lib/permissions';
+export { isAdmin, canAssignTo, canCreateUser, canVerifyTasks, canViewReportsFor, canManageUser, canManageTask, canDelegate, canDelegateTo } from '@/lib/permissions';
 
 export const ALLOWED_DOMAINS = [
   'pepschoolv2.com',

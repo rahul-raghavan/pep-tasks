@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { isAdmin, canVerifyTasks } from '@/lib/permissions';
+import { isAdmin, canVerifyTasks, canManageTask, canAssignTo, canDelegate, canDelegateTo } from '@/lib/permissions';
 import { getCurrentUser } from '@/lib/auth';
 
 // GET /api/tasks/[id] — get single task with joins
@@ -18,7 +18,8 @@ export async function GET(
     .select(`
       *,
       assignee:pep_users!pep_tasks_assigned_to_fkey(*),
-      assigner:pep_users!pep_tasks_assigned_by_fkey(*)
+      assigner:pep_users!pep_tasks_assigned_by_fkey(*),
+      delegate:pep_users!pep_tasks_delegated_to_fkey(*)
     `)
     .eq('id', id)
     .single();
@@ -27,9 +28,18 @@ export async function GET(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  // Staff can only see their own tasks
-  if (user.role === 'staff' && task.assigned_to !== user.id) {
+  // Staff can only see tasks assigned to them or delegated to them
+  if (user.role === 'staff' && task.assigned_to !== user.id && task.delegated_to !== user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  // Admins can't see tasks assigned to/by super-admins (unless they ARE super-admin)
+  if (user.role === 'admin') {
+    const assigneeRole = Array.isArray(task.assignee) ? task.assignee[0]?.role : task.assignee?.role;
+    const assignerRole = Array.isArray(task.assigner) ? task.assigner[0]?.role : task.assigner?.role;
+    if (assigneeRole === 'super_admin' || assignerRole === 'super_admin') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
   }
 
   // Flatten joins
@@ -37,6 +47,7 @@ export async function GET(
     ...task,
     assignee: Array.isArray(task.assignee) ? task.assignee[0] : task.assignee,
     assigner: Array.isArray(task.assigner) ? task.assigner[0] : task.assigner,
+    delegate: Array.isArray(task.delegate) ? task.delegate[0] : task.delegate,
   };
 
   return NextResponse.json(result);
@@ -64,9 +75,25 @@ export async function PATCH(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
-  // Staff can only update their own tasks (and only status)
-  if (user.role === 'staff' && currentTask.assigned_to !== user.id) {
+  // Staff can only update tasks assigned to them or delegated to them (and only status)
+  if (user.role === 'staff' && currentTask.assigned_to !== user.id && currentTask.delegated_to !== user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  // Admins can't update tasks assigned to/by super-admins
+  if (user.role === 'admin') {
+    // Look up assignee and assigner roles
+    const roleIds = [currentTask.assigned_to, currentTask.assigned_by].filter(Boolean);
+    if (roleIds.length > 0) {
+      const { data: relatedUsers } = await db
+        .from('pep_users')
+        .select('id, role')
+        .in('id', roleIds);
+      const hasSuperAdmin = relatedUsers?.some((u: { role: string }) => u.role === 'super_admin');
+      if (hasSuperAdmin) {
+        return NextResponse.json({ error: 'Admins cannot modify super-admin tasks' }, { status: 403 });
+      }
+    }
   }
 
   const body = await request.json();
@@ -128,8 +155,28 @@ export async function PATCH(
       updates.description = body.description?.trim() || null;
     }
     if (body.assigned_to !== undefined && body.assigned_to !== currentTask.assigned_to) {
+      if (body.assigned_to) {
+        // Validate the new assignee exists, is active, and respects role hierarchy
+        const { data: newAssignee } = await db
+          .from('pep_users')
+          .select('role, is_active')
+          .eq('id', body.assigned_to)
+          .single();
+
+        if (!newAssignee || !newAssignee.is_active) {
+          return NextResponse.json({ error: 'Invalid assignee' }, { status: 400 });
+        }
+        if (!canAssignTo(user.role, newAssignee.role)) {
+          return NextResponse.json({ error: 'You cannot assign tasks to users of that role' }, { status: 403 });
+        }
+      }
       updates.assigned_to = body.assigned_to || null;
       activityDetails.reassigned = { from: currentTask.assigned_to, to: body.assigned_to };
+      // Auto-clear delegation when reassigning
+      if (currentTask.delegated_to) {
+        updates.delegated_to = null;
+        activityDetails.delegation_cleared = true;
+      }
     }
     if (body.due_date !== undefined && body.due_date !== currentTask.due_date) {
       updates.due_date = body.due_date || null;
@@ -138,6 +185,56 @@ export async function PATCH(
     if (body.priority !== undefined && body.priority !== currentTask.priority) {
       updates.priority = body.priority;
       activityDetails.priority_changed = { from: currentTask.priority, to: body.priority };
+    }
+  }
+
+  // Handle delegation (admin+ only, not part of general field updates)
+  if (body.delegated_to !== undefined) {
+    if (body.delegated_to === null) {
+      // Removing delegation
+      if (!canDelegate(user.role, user.id, currentTask.assigned_to)) {
+        return NextResponse.json({ error: 'You cannot modify delegation on this task' }, { status: 403 });
+      }
+      if (currentTask.delegated_to) {
+        updates.delegated_to = null;
+        // Log undelegation separately
+        await db.from('pep_activity_log').insert({
+          task_id: id,
+          user_id: user.id,
+          action: 'undelegated',
+          details: { from: currentTask.delegated_to },
+        });
+      }
+    } else if (body.delegated_to !== currentTask.delegated_to) {
+      // Setting or changing delegation
+      if (!canDelegate(user.role, user.id, currentTask.assigned_to)) {
+        return NextResponse.json({ error: 'You cannot delegate this task' }, { status: 403 });
+      }
+      // Validate the delegate exists, is active, and is staff
+      const { data: delegateUser } = await db
+        .from('pep_users')
+        .select('id, name, role, is_active')
+        .eq('id', body.delegated_to)
+        .single();
+
+      if (!delegateUser || !delegateUser.is_active) {
+        return NextResponse.json({ error: 'Invalid delegate' }, { status: 400 });
+      }
+      if (!canDelegateTo(delegateUser.role)) {
+        return NextResponse.json({ error: 'You can only delegate to staff members' }, { status: 403 });
+      }
+
+      updates.delegated_to = body.delegated_to;
+      await db.from('pep_activity_log').insert({
+        task_id: id,
+        user_id: user.id,
+        action: 'delegated',
+        details: {
+          to: body.delegated_to,
+          to_name: delegateUser.name,
+          ...(currentTask.delegated_to ? { from: currentTask.delegated_to } : {}),
+        },
+      });
     }
   }
 

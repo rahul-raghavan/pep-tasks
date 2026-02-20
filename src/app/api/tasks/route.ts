@@ -22,13 +22,14 @@ export async function GET(request: Request) {
     .select(`
       *,
       assignee:pep_users!pep_tasks_assigned_to_fkey(*),
-      assigner:pep_users!pep_tasks_assigned_by_fkey(*)
+      assigner:pep_users!pep_tasks_assigned_by_fkey(*),
+      delegate:pep_users!pep_tasks_delegated_to_fkey(*)
     `)
     .order('created_at', { ascending: false });
 
-  // Role-based filtering: staff sees only their own tasks
+  // Role-based filtering: staff sees tasks assigned to them or delegated to them
   if (user.role === 'staff') {
-    query = query.eq('assigned_to', user.id);
+    query = query.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
   }
 
   // Optional filters
@@ -56,11 +57,21 @@ export async function GET(request: Request) {
   }
 
   // Flatten join results (Supabase returns arrays for joins)
-  const tasks = (data || []).map((t: Record<string, unknown>) => ({
+  let tasks = (data || []).map((t: Record<string, unknown>) => ({
     ...t,
     assignee: Array.isArray(t.assignee) ? t.assignee[0] : t.assignee,
     assigner: Array.isArray(t.assigner) ? t.assigner[0] : t.assigner,
+    delegate: Array.isArray(t.delegate) ? t.delegate[0] : t.delegate,
   }));
+
+  // Admins can't see tasks involving super-admins
+  if (user.role === 'admin') {
+    tasks = tasks.filter((t: Record<string, unknown>) => {
+      const assignee = t.assignee as { role?: string } | null;
+      const assigner = t.assigner as { role?: string } | null;
+      return assignee?.role !== 'super_admin' && assigner?.role !== 'super_admin';
+    });
+  }
 
   return NextResponse.json(tasks);
 }
