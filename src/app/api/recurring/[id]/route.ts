@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { getCurrentUser, isAdmin } from '@/lib/auth';
+import { getCurrentUser, isAdmin, canManageTask } from '@/lib/auth';
 
 export async function GET(
   _req: NextRequest,
@@ -33,6 +33,33 @@ export async function PATCH(
   }
 
   const { id } = await params;
+  const db = createServiceRoleClient();
+
+  // Fetch the template to check ownership/hierarchy
+  const { data: template } = await db
+    .from('pep_recurring_tasks')
+    .select('assigned_by, assigned_to')
+    .eq('id', id)
+    .single();
+
+  if (!template) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  // Admin can't modify templates created by or assigned to super-admins
+  if (user.role === 'admin') {
+    const roleIds = [template.assigned_by, template.assigned_to].filter(Boolean);
+    if (roleIds.length > 0) {
+      const { data: relatedUsers } = await db
+        .from('pep_users')
+        .select('id, role')
+        .in('id', roleIds);
+      if (relatedUsers?.some((u: { role: string }) => u.role === 'super_admin')) {
+        return NextResponse.json({ error: 'Admins cannot modify super-admin recurring templates' }, { status: 403 });
+      }
+    }
+  }
+
   const body = await req.json();
 
   // Only allow updating specific fields
@@ -43,7 +70,6 @@ export async function PATCH(
   }
   updates.updated_at = new Date().toISOString();
 
-  const db = createServiceRoleClient();
   const { data, error } = await db
     .from('pep_recurring_tasks')
     .update(updates)
@@ -66,6 +92,31 @@ export async function DELETE(
 
   const { id } = await params;
   const db = createServiceRoleClient();
+
+  // Check hierarchy before deleting
+  const { data: template } = await db
+    .from('pep_recurring_tasks')
+    .select('assigned_by, assigned_to')
+    .eq('id', id)
+    .single();
+
+  if (!template) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
+
+  if (user.role === 'admin') {
+    const roleIds = [template.assigned_by, template.assigned_to].filter(Boolean);
+    if (roleIds.length > 0) {
+      const { data: relatedUsers } = await db
+        .from('pep_users')
+        .select('id, role')
+        .in('id', roleIds);
+      if (relatedUsers?.some((u: { role: string }) => u.role === 'super_admin')) {
+        return NextResponse.json({ error: 'Admins cannot delete super-admin recurring templates' }, { status: 403 });
+      }
+    }
+  }
+
   const { error } = await db
     .from('pep_recurring_tasks')
     .update({ is_active: false, updated_at: new Date().toISOString() })

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { isAdmin, canCreateUser } from '@/lib/permissions';
+import { isAdmin, canCreateUser, canManageUser } from '@/lib/permissions';
 import { getCurrentUser } from '@/lib/auth';
 import { UserRole } from '@/types/database';
 
@@ -35,6 +35,11 @@ export async function PATCH(
     return NextResponse.json({ error: "You can't modify your own account" }, { status: 400 });
   }
 
+  // Hierarchy check: admins can't modify super_admins at all
+  if (!canManageUser(user.role, targetUser.role)) {
+    return NextResponse.json({ error: 'You cannot modify users of this role' }, { status: 403 });
+  }
+
   const body = await request.json();
   const updates: Record<string, unknown> = {};
 
@@ -43,10 +48,6 @@ export async function PATCH(
     const newRole = body.role as UserRole;
     if (!canCreateUser(user.role, newRole)) {
       return NextResponse.json({ error: 'You cannot assign that role' }, { status: 403 });
-    }
-    // Admin can't modify super_admins
-    if (user.role === 'admin' && targetUser.role === 'super_admin') {
-      return NextResponse.json({ error: 'Cannot modify super admins' }, { status: 403 });
     }
     updates.role = newRole;
   }
