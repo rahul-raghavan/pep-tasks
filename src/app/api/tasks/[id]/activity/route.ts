@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
 import { getCurrentUser } from '@/lib/auth';
+import { getCenterUserIds } from '@/lib/centers';
 
 // GET /api/tasks/[id]/activity
 export async function GET(
@@ -22,6 +23,39 @@ export async function GET(
       .single();
     if (!task || (task.assigned_to !== user.id && task.delegated_to !== user.id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  // Admin: hierarchy + center check
+  if (user.role === 'admin') {
+    const { data: task } = await db
+      .from('pep_tasks')
+      .select('assigned_to, assigned_by')
+      .eq('id', id)
+      .single();
+
+    if (!task) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    // Hierarchy check: admins can't access super-admin tasks
+    const roleIds = [task.assigned_to, task.assigned_by].filter(Boolean);
+    if (roleIds.length > 0) {
+      const { data: relatedUsers } = await db
+        .from('pep_users')
+        .select('id, role')
+        .in('id', roleIds);
+      if (relatedUsers?.some((u: { role: string }) => u.role === 'super_admin')) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
+
+    // Center check: skip if task involves me directly
+    if (task.assigned_to !== user.id && task.assigned_by !== user.id) {
+      const centerUserIds = await getCenterUserIds(db, user.id);
+      if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
     }
   }
 

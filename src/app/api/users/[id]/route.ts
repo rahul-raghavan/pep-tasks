@@ -62,23 +62,66 @@ export async function PATCH(
     updates.name = body.name?.trim() || null;
   }
 
-  if (Object.keys(updates).length === 0) {
+  // Center assignment (super_admin only)
+  if (body.center_ids !== undefined) {
+    if (user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Only super admins can assign centers' }, { status: 403 });
+    }
+
+    // Delete existing center assignments
+    await db.from('pep_user_centers').delete().eq('user_id', id);
+
+    // Insert new assignments
+    const centerIds = body.center_ids as string[];
+    if (centerIds.length > 0) {
+      const rows = centerIds.map((centerId: string) => ({
+        user_id: id,
+        center_id: centerId,
+      }));
+      const { error: centerError } = await db.from('pep_user_centers').insert(rows);
+      if (centerError) {
+        console.error('Error assigning centers:', centerError);
+        return NextResponse.json({ error: 'Failed to assign centers' }, { status: 500 });
+      }
+    }
+  }
+
+  if (Object.keys(updates).length === 0 && body.center_ids === undefined) {
     return NextResponse.json({ error: 'No changes' }, { status: 400 });
   }
 
-  updates.updated_at = new Date().toISOString();
+  if (Object.keys(updates).length > 0) {
+    updates.updated_at = new Date().toISOString();
 
-  const { data, error } = await db
-    .from('pep_users')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
+    const { error } = await db
+      .from('pep_users')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
 
-  if (error) {
-    console.error('Error updating user:', error);
-    return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
+    if (error) {
+      console.error('Error updating user:', error);
+      return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
+    }
   }
 
-  return NextResponse.json(data);
+  // Return the updated user with centers
+  const { data: updatedUser } = await db
+    .from('pep_users')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  // Fetch centers
+  const { data: userCenters } = await db
+    .from('pep_user_centers')
+    .select('center_id, pep_centers(id, name, is_active)')
+    .eq('user_id', id);
+
+  const centers = (userCenters || []).map((uc: { pep_centers: unknown }) => {
+    return Array.isArray(uc.pep_centers) ? uc.pep_centers[0] : uc.pep_centers;
+  }).filter(Boolean);
+
+  return NextResponse.json({ ...updatedUser, centers });
 }

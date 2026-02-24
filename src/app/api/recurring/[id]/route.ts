@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { getCurrentUser, isAdmin, canManageTask } from '@/lib/auth';
+import { getCurrentUser, isAdmin, canManageTask, canAssignTo } from '@/lib/auth';
 
 export async function GET(
   _req: NextRequest,
@@ -20,6 +20,16 @@ export async function GET(
     .single();
 
   if (error) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  // Admin: block access to templates involving super_admins
+  if (user.role === 'admin') {
+    const assignee = (Array.isArray(data.assignee) ? data.assignee[0] : data.assignee) as { role?: string } | null;
+    const assigner = (Array.isArray(data.assigner) ? data.assigner[0] : data.assigner) as { role?: string } | null;
+    if (assignee?.role === 'super_admin' || assigner?.role === 'super_admin') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
   return NextResponse.json(data);
 }
 
@@ -69,6 +79,22 @@ export async function PATCH(
     if (key in body) updates[key] = body[key];
   }
   updates.updated_at = new Date().toISOString();
+
+  // 5E: Validate assigned_to if being changed
+  if (updates.assigned_to) {
+    const { data: targetUser } = await db
+      .from('pep_users')
+      .select('role, is_active')
+      .eq('id', updates.assigned_to as string)
+      .single();
+
+    if (!targetUser || !targetUser.is_active) {
+      return NextResponse.json({ error: 'Invalid assignee' }, { status: 400 });
+    }
+    if (!canAssignTo(user.role, targetUser.role)) {
+      return NextResponse.json({ error: 'Cannot assign to this user' }, { status: 403 });
+    }
+  }
 
   const { data, error } = await db
     .from('pep_recurring_tasks')

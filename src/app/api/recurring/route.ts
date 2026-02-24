@@ -15,7 +15,18 @@ export async function GET() {
     .order('created_at', { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+
+  // Admin: filter out templates involving super_admins
+  let results = data || [];
+  if (user.role === 'admin') {
+    results = results.filter((t: Record<string, unknown>) => {
+      const assignee = (Array.isArray(t.assignee) ? t.assignee[0] : t.assignee) as { role?: string } | null;
+      const assigner = (Array.isArray(t.assigner) ? t.assigner[0] : t.assigner) as { role?: string } | null;
+      return assignee?.role !== 'super_admin' && assigner?.role !== 'super_admin';
+    });
+  }
+
+  return NextResponse.json(results);
 }
 
 export async function POST(req: NextRequest) {

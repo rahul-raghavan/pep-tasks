@@ -6,15 +6,33 @@ import { useUserContext } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ListTodo } from 'lucide-react';
-import { ROLE_COLORS, STATUS_COLORS, STATUS_LABELS } from '@/lib/constants/theme';
-import { TimelineItem, TaskStatus } from '@/types/database';
+import { ListTodo, MessageSquare, User, Users } from 'lucide-react';
+import { isAdmin } from '@/lib/permissions';
+import { isOverdue as checkOverdue } from '@/lib/utils';
+import { ROLE_COLORS, STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
+import { TimelineItem, TaskStatus, TaskPriority, DashboardComment } from '@/types/database';
+import { format } from 'date-fns';
+
+interface TaskSummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  due_date: string | null;
+  assigned_to: string | null;
+  assigned_by: string | null;
+  assigned_to_name?: string | null;
+}
 
 interface DashboardStats {
   open: number;
   dueThisWeek: number;
   overdue: number;
   timeline: TimelineItem[];
+  myTasks: TaskSummary[];
+  assignedByMe: TaskSummary[];
+  recentComments: DashboardComment[];
+  pendingVerification?: number;
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -53,7 +71,7 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className={`grid grid-cols-1 gap-4 ${isAdmin(user.role) ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
         <Card
           className="cursor-pointer hover:shadow-sm transition-shadow"
           onClick={() => router.push('/tasks?status=open')}
@@ -87,7 +105,178 @@ export default function DashboardPage() {
             <p className="text-xs text-muted-foreground mt-1">Overdue</p>
           </CardContent>
         </Card>
+        {isAdmin(user.role) && (
+          <Card
+            className="cursor-pointer hover:shadow-sm transition-shadow"
+            onClick={() => router.push('/tasks?status=completed')}
+          >
+            <CardContent className="pt-6">
+              <div className={`text-2xl font-bold ${stats && (stats.pendingVerification ?? 0) > 0 ? 'text-[#E8A87C]' : ''}`}>
+                {stats ? (stats.pendingVerification ?? '--') : '--'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Pending Verification</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {/* Your Tasks / Assigned by You — big category boxes */}
+      {stats && (
+        <div className={`grid grid-cols-1 gap-4 ${isAdmin(user.role) ? 'md:grid-cols-2' : ''}`}>
+          {/* Your Tasks */}
+          <Card className="border-l-4 border-l-[#5BB8D6]">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <User className="w-5 h-5 text-[#5BB8D6]" />
+                  <CardTitle className="text-lg">Your Tasks</CardTitle>
+                </div>
+                <Badge variant="secondary" className="bg-[#5BB8D6]/15 text-[#3A8BA8] text-base px-3">
+                  {stats.myTasks.length}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">Tasks assigned to you</p>
+            </CardHeader>
+            <CardContent>
+              {stats.myTasks.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No active tasks assigned to you</p>
+              ) : (
+                <div className="space-y-2">
+                  {stats.myTasks.map((t) => {
+                    const overdue = t.due_date && !['completed', 'verified'].includes(t.status) && checkOverdue(t.due_date);
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => router.push(`/tasks/${t.id}`)}
+                        className={`flex items-center justify-between gap-3 rounded-md border p-3 cursor-pointer hover:shadow-sm transition-shadow ${
+                          overdue ? 'border-[#D4705A]/40 bg-[#D4705A]/5' : ''
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{t.title}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="secondary" className={`${STATUS_COLORS[t.status]} text-[10px] px-1.5 py-0`}>
+                              {STATUS_LABELS[t.status]}
+                            </Badge>
+                            <Badge variant="secondary" className={`${PRIORITY_COLORS[t.priority]} text-[10px] px-1.5 py-0`}>
+                              {t.priority}
+                            </Badge>
+                          </div>
+                        </div>
+                        {t.due_date && (
+                          <span className={`text-xs shrink-0 ${overdue ? 'text-[#D4705A] font-medium' : 'text-muted-foreground'}`}>
+                            {format(new Date(t.due_date), 'MMM d')}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Assigned by You (admin+ only) */}
+          {isAdmin(user.role) && (
+            <Card className="border-l-4 border-l-[#7BC47F]">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-5 h-5 text-[#7BC47F]" />
+                    <CardTitle className="text-lg">Assigned by You</CardTitle>
+                  </div>
+                  <Badge variant="secondary" className="bg-[#7BC47F]/15 text-[#4A7A5A] text-base px-3">
+                    {stats.assignedByMe.length}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground">Tasks you assigned to others</p>
+              </CardHeader>
+              <CardContent>
+                {stats.assignedByMe.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">No active tasks assigned by you</p>
+                ) : (
+                  <div className="space-y-2">
+                    {stats.assignedByMe.map((t) => {
+                      const overdue = t.due_date && !['completed', 'verified'].includes(t.status) && checkOverdue(t.due_date);
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => router.push(`/tasks/${t.id}`)}
+                          className={`flex items-center justify-between gap-3 rounded-md border p-3 cursor-pointer hover:shadow-sm transition-shadow ${
+                            overdue ? 'border-[#D4705A]/40 bg-[#D4705A]/5' : ''
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate">{t.title}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <Badge variant="secondary" className={`${STATUS_COLORS[t.status]} text-[10px] px-1.5 py-0`}>
+                                {STATUS_LABELS[t.status]}
+                              </Badge>
+                              {t.assigned_to_name && (
+                                <span className="text-[11px] text-muted-foreground">{t.assigned_to_name}</span>
+                              )}
+                            </div>
+                          </div>
+                          {t.due_date && (
+                            <span className={`text-xs shrink-0 ${overdue ? 'text-[#D4705A] font-medium' : 'text-muted-foreground'}`}>
+                              {format(new Date(t.due_date), 'MMM d')}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Recent Comments */}
+      {stats && stats.recentComments && stats.recentComments.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-[#9B8EC4]" />
+              <CardTitle className="text-lg">Recent Comments</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {stats.recentComments.map((comment) => (
+                <div
+                  key={comment.id}
+                  className={`rounded-md border p-3 cursor-pointer hover:shadow-sm transition-shadow ${
+                    comment.context === 'verification' ? 'border-l-4 border-l-[#9B8EC4]' : ''
+                  }`}
+                  onClick={() => router.push(`/tasks/${comment.task_id}`)}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-medium shrink-0">{comment.author_name}</span>
+                      <span className="text-xs text-muted-foreground truncate">
+                        on {comment.task_title}
+                      </span>
+                      {comment.context === 'verification' && (
+                        <Badge variant="secondary" className="bg-[#9B8EC4]/15 text-[#7B6EA4] text-[10px] px-1.5 py-0 shrink-0">
+                          verification
+                        </Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {formatRelativeTime(comment.created_at)}
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted-foreground line-clamp-2">
+                    {comment.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Recent Activity Timeline */}
       <Card>
@@ -115,6 +304,35 @@ export default function DashboardPage() {
                         <>
                           {' created '}
                           <span className="font-medium">{item.task_title}</span>
+                          {item.assigned_to_name && (
+                            <>
+                              {' — assigned to '}
+                              <span className="font-medium">
+                                {item.assigned_to_id === user.id ? 'you' : item.assigned_to_name}
+                              </span>
+                            </>
+                          )}
+                          {item.due_date && (
+                            <span className="text-muted-foreground">
+                              {' · due '}{format(new Date(item.due_date), 'MMM d')}
+                            </span>
+                          )}
+                        </>
+                      ) : item.action === 'delegated' ? (
+                        <>
+                          {' delegated '}
+                          <span className="font-medium">{item.task_title}</span>
+                          {item.delegated_to_name && (
+                            <>
+                              {' to '}
+                              <span className="font-medium">{item.delegated_to_name}</span>
+                            </>
+                          )}
+                        </>
+                      ) : item.action === 'undelegated' ? (
+                        <>
+                          {' removed delegation from '}
+                          <span className="font-medium">{item.task_title}</span>
                         </>
                       ) : (
                         <>
@@ -133,6 +351,12 @@ export default function DashboardPage() {
                             </>
                           )}
                         </>
+                      )}
+                      {isAdmin(user.role) && item.assigned_to_id === user.id && (
+                        <span className="text-[10px] text-[#5BB8D6] ml-1">(your task)</span>
+                      )}
+                      {isAdmin(user.role) && item.assigned_by_id === user.id && item.assigned_to_id !== user.id && (
+                        <span className="text-[10px] text-[#7BC47F] ml-1">(assigned by you)</span>
                       )}
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">

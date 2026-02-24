@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { UserRole } from '@/types/database';
 import { startOfMonth, endOfMonth, parseISO } from 'date-fns';
 import { getTodayIST } from '@/lib/utils';
+import { getCenterUserIds } from '@/lib/centers';
 
 interface PersonReport {
   user_id: string;
@@ -52,6 +53,14 @@ export async function GET(request: Request) {
   const { data: allUsers } = await usersQuery;
   if (!allUsers) return NextResponse.json([]);
 
+  // Admin: filter to only users in their centers (+ self)
+  let visibleUsers = allUsers;
+  if (user.role === 'admin') {
+    const centerUserIds = await getCenterUserIds(db, user.id);
+    const visibleSet = new Set(centerUserIds.length > 0 ? [...centerUserIds, user.id] : [user.id]);
+    visibleUsers = allUsers.filter((u) => visibleSet.has(u.id));
+  }
+
   // Get all tasks created in this month
   const { data: tasks } = await db
     .from('pep_tasks')
@@ -62,7 +71,7 @@ export async function GET(request: Request) {
   const taskList = tasks || [];
   const today = getTodayIST();
 
-  const reports: PersonReport[] = allUsers
+  const reports: PersonReport[] = visibleUsers
     .filter((u) => canViewReportsFor(user.role, u.role))
     .map((u) => {
       const userTasks = taskList.filter((t) => t.assigned_to === u.id);

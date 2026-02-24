@@ -59,6 +59,10 @@ export default function NewTaskPage() {
       toast.error('Title is required');
       return;
     }
+    if (!assignedTo) {
+      toast.error('Please select someone to assign this task to');
+      return;
+    }
 
     setSubmitting(true);
     const res = await fetch('/api/tasks', {
@@ -67,7 +71,7 @@ export default function NewTaskPage() {
       body: JSON.stringify({
         title,
         description: description || null,
-        assigned_to: assignedTo && assignedTo !== 'unassigned' ? assignedTo : null,
+        assigned_to: assignedTo,
         due_date: dueDate || null,
         priority,
       }),
@@ -125,7 +129,7 @@ export default function NewTaskPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <Label>Assign to</Label>
+                  <Label>Assign to *</Label>
                   <button
                     type="button"
                     className="text-xs text-[#3A8BA8] hover:underline"
@@ -139,7 +143,6 @@ export default function NewTaskPage() {
                     <SelectValue placeholder="Select a person" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="unassigned">Unassigned</SelectItem>
                     {users.map((u) => (
                       <SelectItem key={u.id} value={u.id}>
                         {u.name || u.email.split('@')[0]}

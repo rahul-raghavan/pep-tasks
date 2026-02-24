@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
 import { isOverdue as checkOverdue } from '@/lib/utils';
-import { PepTask, PepUser, TaskStatus, TaskPriority } from '@/types/database';
+import { PepTask, PepUser, PepCenter, TaskStatus, TaskPriority } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -27,20 +27,23 @@ export default function TasksPage() {
   const statusParam = searchParams.get('status');
   const [tasks, setTasks] = useState<PepTask[]>([]);
   const [users, setUsers] = useState<PepUser[]>([]);
+  const [centers, setCenters] = useState<PepCenter[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>(statusParam || 'all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
+  const [centerFilter, setCenterFilter] = useState<string>('all');
 
   useEffect(() => {
     if (isAdmin(user.role)) {
       fetch('/api/users').then(r => r.json()).then(setUsers);
+      fetch('/api/centers').then(r => r.json()).then(setCenters);
     }
   }, [user.role]);
 
   useEffect(() => {
     fetchTasks();
-  }, [statusFilter, priorityFilter, assigneeFilter, viewParam]);
+  }, [statusFilter, priorityFilter, assigneeFilter, centerFilter, viewParam]);
 
   async function fetchTasks() {
     setLoading(true);
@@ -49,6 +52,7 @@ export default function TasksPage() {
     if (statusFilter !== 'all') params.set('status', statusFilter);
     if (priorityFilter !== 'all') params.set('priority', priorityFilter);
     if (assigneeFilter !== 'all') params.set('assignee', assigneeFilter);
+    if (centerFilter !== 'all') params.set('center', centerFilter);
 
     const res = await fetch(`/api/tasks?${params}`);
     if (res.ok) {
@@ -122,6 +126,22 @@ export default function TasksPage() {
               {users.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
                   {u.name || u.email.split('@')[0]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {isAdmin(user.role) && centers.length > 0 && (
+          <Select value={centerFilter} onValueChange={setCenterFilter}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Center" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Centers</SelectItem>
+              {centers.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
                 </SelectItem>
               ))}
             </SelectContent>

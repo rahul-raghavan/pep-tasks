@@ -60,3 +60,23 @@ export function canManageTask(actorRole: UserRole, targetRole: UserRole | null |
   if (targetRole === 'super_admin') return false;
   return true;
 }
+
+// Is the given timestamp within the 24-hour edit window?
+export function isWithinEditWindow(createdAt: string): boolean {
+  const created = new Date(createdAt).getTime();
+  const now = Date.now();
+  const twentyFourHours = 24 * 60 * 60 * 1000;
+  return now - created < twentyFourHours;
+}
+
+// Can the creator edit this task? Must be admin+, be the creator, and within 24h window.
+export function canCreatorEdit(userId: string, taskAssignedBy: string | null, taskCreatedAt: string): boolean {
+  if (userId !== taskAssignedBy) return false;
+  return isWithinEditWindow(taskCreatedAt);
+}
+
+// Can the creator delete this task? Same logic as edit.
+export function canCreatorDelete(userId: string, taskAssignedBy: string | null, taskCreatedAt: string): boolean {
+  if (userId !== taskAssignedBy) return false;
+  return isWithinEditWindow(taskCreatedAt);
+}

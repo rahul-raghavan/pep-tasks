@@ -26,7 +26,32 @@ export async function GET() {
     return NextResponse.json({ error: 'Failed to fetch users' }, { status: 500 });
   }
 
-  return NextResponse.json(data || []);
+  // Fetch center assignments for all users
+  const userIds = (data || []).map((u: { id: string }) => u.id);
+  let centerMap: Record<string, { id: string; name: string; is_active: boolean }[]> = {};
+
+  if (userIds.length > 0) {
+    const { data: userCenters } = await db
+      .from('pep_user_centers')
+      .select('user_id, center_id, pep_centers(id, name, is_active)')
+      .in('user_id', userIds);
+
+    if (userCenters) {
+      for (const uc of userCenters) {
+        const center = Array.isArray(uc.pep_centers) ? uc.pep_centers[0] : uc.pep_centers;
+        if (!center) continue;
+        if (!centerMap[uc.user_id]) centerMap[uc.user_id] = [];
+        centerMap[uc.user_id].push(center);
+      }
+    }
+  }
+
+  const usersWithCenters = (data || []).map((u: { id: string }) => ({
+    ...u,
+    centers: centerMap[u.id] || [],
+  }));
+
+  return NextResponse.json(usersWithCenters);
 }
 
 // POST /api/users — create/invite a user (admin+ only)
