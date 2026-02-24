@@ -11,6 +11,7 @@ const dmSans = DM_Sans({
 export const metadata: Metadata = {
   title: "PEP Tasks",
   description: "Internal task management for PEP School staff",
+  manifest: "/manifest.json",
 };
 
 export const viewport: Viewport = {

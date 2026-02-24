@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { isAdmin, canVerifyTasks, canManageTask, canAssignTo, canDelegate, canDelegateTo } from '@/lib/permissions';
+import { isAdmin, canVerifyTasks, canManageTask, canAssignTo, canDelegate, canDelegateTo, canCreatorDelete, isWithinEditWindow } from '@/lib/permissions';
 import { getCurrentUser } from '@/lib/auth';
+import { getCenterUserIds } from '@/lib/centers';
+import { sendPushNotification } from '@/lib/notifications';
 
 // GET /api/tasks/[id] — get single task with joins
 export async function GET(
@@ -40,6 +42,14 @@ export async function GET(
     if (assigneeRole === 'super_admin' || assignerRole === 'super_admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
+
+    // Center visibility check: skip if task involves me directly
+    if (task.assigned_to !== user.id && task.assigned_by !== user.id) {
+      const centerUserIds = await getCenterUserIds(db, user.id);
+      if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+    }
   }
 
   // Flatten joins
@@ -75,6 +85,11 @@ export async function PATCH(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
+  // Verified tasks cannot be modified
+  if (currentTask.status === 'verified') {
+    return NextResponse.json({ error: 'Verified tasks cannot be modified' }, { status: 400 });
+  }
+
   // Staff can only update tasks assigned to them or delegated to them (and only status)
   if (user.role === 'staff' && currentTask.assigned_to !== user.id && currentTask.delegated_to !== user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -92,6 +107,14 @@ export async function PATCH(
       const hasSuperAdmin = relatedUsers?.some((u: { role: string }) => u.role === 'super_admin');
       if (hasSuperAdmin) {
         return NextResponse.json({ error: 'Admins cannot modify super-admin tasks' }, { status: 403 });
+      }
+    }
+
+    // Center visibility check: skip if task involves me directly
+    if (currentTask.assigned_to !== user.id && currentTask.assigned_by !== user.id) {
+      const centerUserIds = await getCenterUserIds(db, user.id);
+      if (!currentTask.assigned_to || !centerUserIds.includes(currentTask.assigned_to)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
   }
@@ -138,6 +161,22 @@ export async function PATCH(
     if (body.status === 'verified') {
       updates.verified_by = user.id;
       updates.verified_at = new Date().toISOString();
+
+      // Optional verification comment
+      if (body.verification_comment?.trim()) {
+        await db.from('pep_comments').insert({
+          task_id: id,
+          author_id: user.id,
+          body: body.verification_comment.trim(),
+          context: 'verification',
+        });
+        await db.from('pep_activity_log').insert({
+          task_id: id,
+          user_id: user.id,
+          action: 'commented',
+          details: { context: 'verification' },
+        });
+      }
     }
     // If reopening from completed, clear completed_at
     if (body.status === 'in_progress' && currentTask.status === 'completed') {
@@ -147,6 +186,19 @@ export async function PATCH(
 
   // Handle other field updates (admin+ only)
   if (isAdmin(user.role)) {
+    // 5D: Enforce creator-only + 24h window for field edits (super_admin bypasses)
+    const hasFieldEdits = ['title', 'description', 'assigned_to', 'due_date', 'priority'].some(
+      (f) => body[f] !== undefined && body[f] !== (currentTask as Record<string, unknown>)[f]
+    );
+    if (hasFieldEdits && user.role !== 'super_admin') {
+      if (user.id !== currentTask.assigned_by || !isWithinEditWindow(currentTask.created_at)) {
+        return NextResponse.json(
+          { error: 'Only the task creator can edit fields within 24 hours' },
+          { status: 403 }
+        );
+      }
+    }
+
     if (body.title !== undefined && body.title !== currentTask.title) {
       updates.title = body.title.trim();
       activityDetails.title_changed = { from: currentTask.title, to: body.title.trim() };
@@ -268,5 +320,95 @@ export async function PATCH(
     details: activityDetails,
   });
 
+  // Push notifications (fire-and-forget)
+  // 1. Task completed → notify assigner
+  if (body.status === 'completed' && currentTask.assigned_by && currentTask.assigned_by !== user.id) {
+    sendPushNotification(currentTask.assigned_by, {
+      title: 'Task Completed',
+      body: currentTask.title,
+      url: `/tasks/${id}`,
+    });
+  }
+
+  // 2. Reassigned → notify new assignee
+  if (updates.assigned_to && updates.assigned_to !== user.id && updates.assigned_to !== currentTask.assigned_to) {
+    sendPushNotification(updates.assigned_to as string, {
+      title: 'Task Assigned to You',
+      body: currentTask.title,
+      url: `/tasks/${id}`,
+    });
+  }
+
+  // 3. Delegated → notify delegate
+  if (updates.delegated_to && updates.delegated_to !== user.id) {
+    sendPushNotification(updates.delegated_to as string, {
+      title: 'Task Delegated to You',
+      body: currentTask.title,
+      url: `/tasks/${id}`,
+    });
+  }
+
   return NextResponse.json(updatedTask);
+}
+
+// DELETE /api/tasks/[id] — delete a task (creator only, within 24h, not verified)
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  if (!isAdmin(user.role)) {
+    return NextResponse.json({ error: 'Only admins can delete tasks' }, { status: 403 });
+  }
+
+  const db = createServiceRoleClient();
+
+  const { data: task } = await db
+    .from('pep_tasks')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (!task) {
+    return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+  }
+
+  if (task.status === 'verified') {
+    return NextResponse.json({ error: 'Verified tasks cannot be deleted' }, { status: 400 });
+  }
+
+  if (!canCreatorDelete(user.id, task.assigned_by, task.created_at)) {
+    return NextResponse.json({ error: 'Only the task creator can delete within 24 hours' }, { status: 403 });
+  }
+
+  // Clean up attachment storage files before cascade-deleting rows
+  const { data: attachments } = await db
+    .from('pep_attachments')
+    .select('storage_path')
+    .eq('task_id', id);
+
+  if (attachments && attachments.length > 0) {
+    const paths = attachments.map((a: { storage_path: string }) => a.storage_path);
+    await db.storage.from('pep-attachments').remove(paths);
+  }
+
+  // Delete activity log and comments first (in case no CASCADE)
+  await db.from('pep_activity_log').delete().eq('task_id', id);
+  await db.from('pep_comments').delete().eq('task_id', id);
+  await db.from('pep_attachments').delete().eq('task_id', id);
+
+  const { error } = await db
+    .from('pep_tasks')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting task:', error);
+    return NextResponse.json({ error: 'Failed to delete task' }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true });
 }

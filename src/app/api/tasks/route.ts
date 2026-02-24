@@ -4,6 +4,8 @@ import { isAdmin } from '@/lib/permissions';
 import { getCurrentUser } from '@/lib/auth';
 import { getTodayIST } from '@/lib/utils';
 import { startOfWeek, endOfWeek } from 'date-fns';
+import { getCenterUserIds } from '@/lib/centers';
+import { sendPushNotification } from '@/lib/notifications';
 
 // GET /api/tasks — list tasks (role-filtered)
 export async function GET(request: Request) {
@@ -15,8 +17,20 @@ export async function GET(request: Request) {
   const priority = searchParams.get('priority');
   const assignee = searchParams.get('assignee');
   const view = searchParams.get('view');
+  const center = searchParams.get('center');
 
   const db = createServiceRoleClient();
+
+  // If center filter is active, first find user IDs in that center
+  let centerUserIds: string[] | null = null;
+  if (center) {
+    const { data: centerUsers } = await db
+      .from('pep_user_centers')
+      .select('user_id')
+      .eq('center_id', center);
+    centerUserIds = (centerUsers || []).map((cu: { user_id: string }) => cu.user_id);
+  }
+
   let query = db
     .from('pep_tasks')
     .select(`
@@ -32,10 +46,32 @@ export async function GET(request: Request) {
     query = query.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
   }
 
+  // Admin center-based filtering: only see tasks for people in their centers + own tasks
+  if (user.role === 'admin') {
+    const adminCenterUserIds = await getCenterUserIds(db, user.id);
+    if (adminCenterUserIds.length === 0) {
+      // No centers — only see tasks assigned to me or assigned by me
+      query = query.or(`assigned_to.eq.${user.id},assigned_by.eq.${user.id}`);
+    } else {
+      // See tasks for center members + own tasks
+      const allVisible = [...new Set([...adminCenterUserIds, user.id])];
+      query = query.or(`assigned_to.in.(${allVisible.join(',')}),assigned_by.eq.${user.id}`);
+    }
+  }
+
   // Optional filters
   if (status) query = query.eq('status', status);
   if (priority) query = query.eq('priority', priority);
   if (assignee) query = query.eq('assigned_to', assignee);
+
+  // Center filter: only show tasks assigned to users in that center
+  if (centerUserIds !== null) {
+    if (centerUserIds.length === 0) {
+      // No users in this center — return empty
+      return NextResponse.json([]);
+    }
+    query = query.in('assigned_to', centerUserIds);
+  }
 
   // Special views from dashboard cards
   if (view === 'overdue') {
@@ -92,6 +128,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
 
+  if (!assigned_to) {
+    return NextResponse.json({ error: 'Please select someone to assign this task to' }, { status: 400 });
+  }
+
   const db = createServiceRoleClient();
 
   // If assigning to someone, validate the target user exists and check role permissions
@@ -137,6 +177,15 @@ export async function POST(request: Request) {
     action: 'created',
     details: { title: task.title, assigned_to, priority },
   });
+
+  // Notify assignee (fire-and-forget)
+  if (assigned_to && assigned_to !== user.id) {
+    sendPushNotification(assigned_to, {
+      title: 'New Task Assigned',
+      body: task.title,
+      url: `/tasks/${task.id}`,
+    });
+  }
 
   return NextResponse.json(task, { status: 201 });
 }

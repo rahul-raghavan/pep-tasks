@@ -4,6 +4,21 @@ export type TaskStatus = 'open' | 'in_progress' | 'completed' | 'verified';
 
 export type TaskPriority = 'urgent' | 'high' | 'normal' | 'low';
 
+export interface PepCenter {
+  id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PepUserCenter {
+  id: string;
+  user_id: string;
+  center_id: string;
+  created_at: string;
+}
+
 export interface PepUser {
   id: string;
   email: string;
@@ -13,6 +28,8 @@ export interface PepUser {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  // Joined fields
+  centers?: PepCenter[];
 }
 
 export interface PepTask {
@@ -41,6 +58,7 @@ export interface PepComment {
   task_id: string;
   author_id: string;
   body: string;
+  context: string | null;
   created_at: string;
   updated_at: string;
   // Joined
@@ -52,9 +70,14 @@ export interface TimelineItem {
   task_id: string;
   task_title: string;
   actor_name: string;
-  action: 'created' | 'status_changed';
+  action: 'created' | 'status_changed' | 'delegated' | 'undelegated';
   from_status: TaskStatus | null;
   to_status: TaskStatus | null;
+  assigned_to_id: string | null;
+  assigned_to_name: string | null;
+  assigned_by_id: string | null;
+  due_date: string | null;
+  delegated_to_name: string | null;
   created_at: string;
 }
 
@@ -82,6 +105,39 @@ export interface PepRecurringTask {
   // Joined fields
   assignee?: PepUser;
   assigner?: PepUser;
+}
+
+export interface DashboardComment {
+  id: string;
+  task_id: string;
+  task_title: string;
+  author_name: string;
+  body: string;
+  context: string | null;
+  created_at: string;
+}
+
+export interface PepAttachment {
+  id: string;
+  task_id: string;
+  uploaded_by: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  storage_path: string;
+  created_at: string;
+  // Joined
+  uploader?: PepUser;
+}
+
+// Shared across apps (no Pep prefix) — keyed by auth.users.id
+export interface PushSubscription {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  auth_key: string;
+  p256dh_key: string;
+  created_at: string;
 }
 
 export interface PepActivityLog {
