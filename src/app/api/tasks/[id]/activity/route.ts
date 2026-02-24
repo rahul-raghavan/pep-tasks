@@ -61,9 +61,10 @@ export async function GET(
 
   const { data, error } = await db
     .from('pep_activity_log')
-    .select('*, user:pep_users!pep_activity_log_user_id_fkey(*)')
+    .select('id, task_id, user_id, action, details, created_at, user:pep_users!pep_activity_log_user_id_fkey(id, name, email)')
     .eq('task_id', id)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(50);
 
   if (error) {
     console.error('Error fetching activity:', error);

@@ -34,10 +34,10 @@ export async function GET(request: Request) {
   let query = db
     .from('pep_tasks')
     .select(`
-      *,
-      assignee:pep_users!pep_tasks_assigned_to_fkey(*),
-      assigner:pep_users!pep_tasks_assigned_by_fkey(*),
-      delegate:pep_users!pep_tasks_delegated_to_fkey(*)
+      id, title, description, status, priority, assigned_to, assigned_by, delegated_to, due_date, completed_at, verified_at, created_at, updated_at,
+      assignee:pep_users!pep_tasks_assigned_to_fkey(id, name, email, role),
+      assigner:pep_users!pep_tasks_assigned_by_fkey(id, name, email, role),
+      delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
     `)
     .order('created_at', { ascending: false });
 

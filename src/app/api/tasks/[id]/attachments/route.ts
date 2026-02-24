@@ -79,9 +79,10 @@ export async function GET(
 
   const { data, error } = await db
     .from('pep_attachments')
-    .select('*, uploader:pep_users!pep_attachments_uploaded_by_fkey(*)')
+    .select('id, task_id, uploaded_by, file_name, file_size, mime_type, storage_path, created_at, uploader:pep_users!pep_attachments_uploaded_by_fkey(id, name, email)')
     .eq('task_id', id)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(30);
 
   if (error) {
     console.error('Error fetching attachments:', error);

@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ListTodo, MessageSquare, User, Users } from 'lucide-react';
+import { ListTodo, MessageSquare, User, Users, RefreshCw } from 'lucide-react';
 import { isAdmin } from '@/lib/permissions';
 import { isOverdue as checkOverdue } from '@/lib/utils';
 import { ROLE_COLORS, STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
@@ -54,21 +54,47 @@ export default function DashboardPage() {
   const { user } = useUserContext();
   const router = useRouter();
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchDashboard = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await fetch('/api/dashboard');
+      const data = await res.json();
+      setStats(data);
+    } catch {}
+    setRefreshing(false);
+  }, []);
 
   useEffect(() => {
-    fetch('/api/dashboard')
-      .then((res) => res.json())
-      .then(setStats)
-      .catch(() => {});
-  }, []);
+    fetchDashboard();
+  }, [fetchDashboard]);
+
+  // Auto-refresh when user switches back to this tab
+  useEffect(() => {
+    const onFocus = () => fetchDashboard();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [fetchDashboard]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl pep-heading">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
-          Welcome back, {user.name || user.email.split('@')[0]}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl pep-heading">Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            Welcome back, {user.name || user.email.split('@')[0]}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => fetchDashboard()}
+          disabled={refreshing}
+          title="Refresh dashboard"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+        </Button>
       </div>
 
       <div className={`grid grid-cols-1 gap-4 ${isAdmin(user.role) ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>

@@ -18,10 +18,10 @@ export async function GET(
   const { data: task, error } = await db
     .from('pep_tasks')
     .select(`
-      *,
-      assignee:pep_users!pep_tasks_assigned_to_fkey(*),
-      assigner:pep_users!pep_tasks_assigned_by_fkey(*),
-      delegate:pep_users!pep_tasks_delegated_to_fkey(*)
+      id, title, description, status, priority, assigned_to, assigned_by, delegated_to, due_date, completed_at, verified_by, verified_at, created_at, updated_at,
+      assignee:pep_users!pep_tasks_assigned_to_fkey(id, name, email, role),
+      assigner:pep_users!pep_tasks_assigned_by_fkey(id, name, email, role),
+      delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
     `)
     .eq('id', id)
     .single();
@@ -30,23 +30,28 @@ export async function GET(
     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
   }
 
+  // Cast to work with Supabase's inferred types from explicit column selects
+  const t = task as Record<string, unknown>;
+
   // Staff can only see tasks assigned to them or delegated to them
-  if (user.role === 'staff' && task.assigned_to !== user.id && task.delegated_to !== user.id) {
+  if (user.role === 'staff' && t.assigned_to !== user.id && t.delegated_to !== user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   // Admins can't see tasks assigned to/by super-admins (unless they ARE super-admin)
   if (user.role === 'admin') {
-    const assigneeRole = Array.isArray(task.assignee) ? task.assignee[0]?.role : task.assignee?.role;
-    const assignerRole = Array.isArray(task.assigner) ? task.assigner[0]?.role : task.assigner?.role;
+    const rawAssignee = t.assignee;
+    const rawAssigner = t.assigner;
+    const assigneeRole = Array.isArray(rawAssignee) ? (rawAssignee[0] as Record<string, unknown>)?.role : (rawAssignee as Record<string, unknown> | null)?.role;
+    const assignerRole = Array.isArray(rawAssigner) ? (rawAssigner[0] as Record<string, unknown>)?.role : (rawAssigner as Record<string, unknown> | null)?.role;
     if (assigneeRole === 'super_admin' || assignerRole === 'super_admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     // Center visibility check: skip if task involves me directly
-    if (task.assigned_to !== user.id && task.assigned_by !== user.id) {
+    if (t.assigned_to !== user.id && t.assigned_by !== user.id) {
       const centerUserIds = await getCenterUserIds(db, user.id);
-      if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
+      if (!t.assigned_to || !centerUserIds.includes(t.assigned_to as string)) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     }
@@ -54,10 +59,10 @@ export async function GET(
 
   // Flatten joins
   const result = {
-    ...task,
-    assignee: Array.isArray(task.assignee) ? task.assignee[0] : task.assignee,
-    assigner: Array.isArray(task.assigner) ? task.assigner[0] : task.assigner,
-    delegate: Array.isArray(task.delegate) ? task.delegate[0] : task.delegate,
+    ...t,
+    assignee: Array.isArray(t.assignee) ? (t.assignee as Record<string, unknown>[])[0] : t.assignee,
+    assigner: Array.isArray(t.assigner) ? (t.assigner as Record<string, unknown>[])[0] : t.assigner,
+    delegate: Array.isArray(t.delegate) ? (t.delegate as Record<string, unknown>[])[0] : t.delegate,
   };
 
   return NextResponse.json(result);

@@ -74,9 +74,10 @@ export async function GET(
 
   const { data, error } = await db
     .from('pep_comments')
-    .select('*, author:pep_users!pep_comments_author_id_fkey(*)')
+    .select('*, author:pep_users!pep_comments_author_id_fkey(id, name, email)')
     .eq('task_id', id)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true })
+    .limit(50);
 
   if (error) {
     return NextResponse.json({ error: 'Failed to fetch comments' }, { status: 500 });
@@ -133,7 +134,7 @@ export async function POST(
       author_id: user.id,
       body: body.trim(),
     })
-    .select('*, author:pep_users!pep_comments_author_id_fkey(*)')
+    .select('id, task_id, author_id, body, context, created_at, updated_at, author:pep_users!pep_comments_author_id_fkey(id, name, email)')
     .single();
 
   if (error) {

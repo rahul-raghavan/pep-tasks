@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
@@ -15,9 +15,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Plus } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { STATUS_COLORS, PRIORITY_COLORS, STATUS_LABELS } from '@/lib/constants/theme';
+import { getCached, setCache } from '@/lib/cache';
 
 export default function TasksPage() {
   const { user } = useUserContext();
@@ -36,16 +37,28 @@ export default function TasksPage() {
 
   useEffect(() => {
     if (isAdmin(user.role)) {
-      fetch('/api/users').then(r => r.json()).then(setUsers);
-      fetch('/api/centers').then(r => r.json()).then(setCenters);
+      const cachedUsers = getCached<PepUser[]>('users_list');
+      if (cachedUsers) {
+        setUsers(cachedUsers);
+      } else {
+        fetch('/api/users').then(r => r.json()).then((data: PepUser[]) => {
+          setCache('users_list', data);
+          setUsers(data);
+        });
+      }
+      const cachedCenters = getCached<PepCenter[]>('centers_list');
+      if (cachedCenters) {
+        setCenters(cachedCenters);
+      } else {
+        fetch('/api/centers').then(r => r.json()).then((data: PepCenter[]) => {
+          setCache('centers_list', data);
+          setCenters(data);
+        });
+      }
     }
   }, [user.role]);
 
-  useEffect(() => {
-    fetchTasks();
-  }, [statusFilter, priorityFilter, assigneeFilter, centerFilter, viewParam]);
-
-  async function fetchTasks() {
+  const fetchTasks = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
     if (viewParam) params.set('view', viewParam);
@@ -60,7 +73,18 @@ export default function TasksPage() {
       setTasks(data);
     }
     setLoading(false);
-  }
+  }, [statusFilter, priorityFilter, assigneeFilter, centerFilter, viewParam]);
+
+  useEffect(() => {
+    fetchTasks();
+  }, [fetchTasks]);
+
+  // Auto-refresh when user switches back to this tab
+  useEffect(() => {
+    const onFocus = () => fetchTasks();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [fetchTasks]);
 
   function isTaskOverdue(task: PepTask): boolean {
     if (!task.due_date) return false;
@@ -80,12 +104,23 @@ export default function TasksPage() {
             <p className="text-sm text-[#5BB8D6] mt-1">Showing tasks due this week</p>
           )}
         </div>
-        {isAdmin(user.role) && (
-          <Button onClick={() => router.push('/tasks/new')} className="uppercase tracking-wider">
-            <Plus className="w-4 h-4 mr-2" />
-            New Task
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => fetchTasks()}
+            disabled={loading}
+            title="Refresh tasks"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-        )}
+          {isAdmin(user.role) && (
+            <Button onClick={() => router.push('/tasks/new')} className="uppercase tracking-wider">
+              <Plus className="w-4 h-4 mr-2" />
+              New Task
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}

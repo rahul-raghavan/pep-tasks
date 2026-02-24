@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
+import { getCached, setCache } from '@/lib/cache';
 
 export default function NewTaskPage() {
   const { user } = useUserContext();
@@ -46,9 +47,15 @@ export default function NewTaskPage() {
   }, [user.role, router]);
 
   async function fetchUsers() {
+    const cached = getCached<PepUser[]>('users_list');
+    if (cached) {
+      setUsers(cached);
+      return;
+    }
     const res = await fetch('/api/users');
     if (res.ok) {
       const data = await res.json();
+      setCache('users_list', data);
       setUsers(data);
     }
   }

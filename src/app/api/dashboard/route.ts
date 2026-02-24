@@ -37,43 +37,16 @@ export async function GET() {
     adminVisibleUserIds = allCandidates.filter((id) => !excludeIds.has(id));
   }
 
-  // Open tasks
-  let openQuery = db
+  // Single query for all active tasks — count open, due this week, and overdue in JS
+  let activeQuery = db
     .from('pep_tasks')
-    .select('id', { count: 'exact', head: true })
+    .select('id, due_date')
     .in('status', ['open', 'in_progress']);
-  if (isStaff) openQuery = openQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
+  if (isStaff) activeQuery = activeQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
   if (user.role === 'admin' && adminVisibleUserIds) {
-    openQuery = adminVisibleUserIds.length > 0
-      ? openQuery.in('assigned_to', adminVisibleUserIds)
-      : openQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
-  }
-
-  // Due this week
-  let weekQuery = db
-    .from('pep_tasks')
-    .select('id', { count: 'exact', head: true })
-    .in('status', ['open', 'in_progress'])
-    .gte('due_date', weekStart)
-    .lte('due_date', weekEnd);
-  if (isStaff) weekQuery = weekQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
-  if (user.role === 'admin' && adminVisibleUserIds) {
-    weekQuery = adminVisibleUserIds.length > 0
-      ? weekQuery.in('assigned_to', adminVisibleUserIds)
-      : weekQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
-  }
-
-  // Overdue
-  let overdueQuery = db
-    .from('pep_tasks')
-    .select('id', { count: 'exact', head: true })
-    .in('status', ['open', 'in_progress'])
-    .lt('due_date', today);
-  if (isStaff) overdueQuery = overdueQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
-  if (user.role === 'admin' && adminVisibleUserIds) {
-    overdueQuery = adminVisibleUserIds.length > 0
-      ? overdueQuery.in('assigned_to', adminVisibleUserIds)
-      : overdueQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
+    activeQuery = adminVisibleUserIds.length > 0
+      ? activeQuery.in('assigned_to', adminVisibleUserIds)
+      : activeQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
   }
 
   // Timeline: recent status changes
@@ -236,16 +209,26 @@ export async function GET() {
     }));
   })();
 
-  const [openRes, weekRes, overdueRes, timeline, pendingRes, myTasksRes, assignedByMeRes, recentComments] = await Promise.all([
-    openQuery,
-    weekQuery,
-    overdueQuery,
+  const [activeRes, timeline, pendingRes, myTasksRes, assignedByMeRes, recentComments] = await Promise.all([
+    activeQuery,
     timelinePromise,
     pendingVerificationQuery,
     myTasksPromise,
     assignedByMePromise,
     recentCommentsPromise,
   ]);
+
+  // Derive counts from the single active tasks query
+  const activeTasks = activeRes.data || [];
+  const openCount = activeTasks.length;
+  let dueThisWeekCount = 0;
+  let overdueCount = 0;
+  for (const t of activeTasks) {
+    if (t.due_date) {
+      if (t.due_date < today) overdueCount++;
+      if (t.due_date >= weekStart && t.due_date <= weekEnd) dueThisWeekCount++;
+    }
+  }
 
   // For "Assigned by You", resolve assignee names
   let assignedByMe: Array<Record<string, unknown>> = [];
@@ -268,9 +251,9 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    open: openRes.count || 0,
-    dueThisWeek: weekRes.count || 0,
-    overdue: overdueRes.count || 0,
+    open: openCount,
+    dueThisWeek: dueThisWeekCount,
+    overdue: overdueCount,
     timeline,
     myTasks: myTasksRes.data || [],
     assignedByMe,

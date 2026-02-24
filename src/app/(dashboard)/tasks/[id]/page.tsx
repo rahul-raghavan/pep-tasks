@@ -33,6 +33,7 @@ import {
 import { ArrowLeft, Clock, User, UserPlus, CalendarDays, Flag, Send, Pencil, Trash2, ShieldCheck, Paperclip, Download, FileText, Image, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
+import { getCached, setCache } from '@/lib/cache';
 
 function formatActivityAction(log: PepActivityLog): string {
   const details = log.details || {};
@@ -128,20 +129,34 @@ export default function TaskDetailPage() {
     if (res.ok) setAttachments(await res.json());
   }, [taskId]);
 
+  // Load task first (fast first render), then load secondary data
   useEffect(() => {
-    Promise.all([fetchTask(), fetchComments(), fetchActivity(), fetchAttachments()]).then(() =>
-      setLoading(false)
-    );
-    // Fetch users for delegation and edit dropdowns (admin+ only)
-    if (isAdmin(user.role)) {
-      fetch('/api/users')
-        .then((r) => r.json())
-        .then((users: PepUser[]) => {
-          setStaffUsers(users.filter((u) => u.role === 'staff' && u.is_active));
-          setAllUsers(users.filter((u) => u.is_active));
-        });
+    fetchTask().then(() => setLoading(false));
+  }, [fetchTask]);
+
+  useEffect(() => {
+    if (!loading && task) {
+      fetchComments();
+      fetchActivity();
+      fetchAttachments();
+      // Fetch users for delegation and edit dropdowns (admin+ only)
+      if (isAdmin(user.role)) {
+        const cached = getCached<PepUser[]>('users_list');
+        if (cached) {
+          setStaffUsers(cached.filter((u) => u.role === 'staff' && u.is_active));
+          setAllUsers(cached.filter((u) => u.is_active));
+        } else {
+          fetch('/api/users')
+            .then((r) => r.json())
+            .then((users: PepUser[]) => {
+              setCache('users_list', users);
+              setStaffUsers(users.filter((u) => u.role === 'staff' && u.is_active));
+              setAllUsers(users.filter((u) => u.is_active));
+            });
+        }
+      }
     }
-  }, [fetchTask, fetchComments, fetchActivity, fetchAttachments, user.role]);
+  }, [loading, task, fetchComments, fetchActivity, fetchAttachments, user.role]);
 
   async function updateStatus(newStatus: TaskStatus) {
     setUpdating(true);

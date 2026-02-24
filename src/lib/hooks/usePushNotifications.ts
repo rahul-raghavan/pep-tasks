@@ -15,10 +15,9 @@ export function usePushNotifications(): UsePushNotificationsReturn {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check current state on mount
+  // Lightweight check on mount — no SW registration, just check permission + existing subscription
   useEffect(() => {
     async function checkState() {
-      // Check browser support
       if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
         setPermission('unsupported');
         setIsLoading(false);
@@ -27,16 +26,11 @@ export function usePushNotifications(): UsePushNotificationsReturn {
 
       setPermission(Notification.permission);
 
-      try {
-        // Register service worker
-        const registration = await navigator.serviceWorker.register('/sw.js');
-        await navigator.serviceWorker.ready;
-
-        // Check existing subscription
+      // Only check subscription if SW is already registered (don't trigger registration)
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      if (registration) {
         const subscription = await registration.pushManager.getSubscription();
         setIsSubscribed(!!subscription);
-      } catch (err) {
-        console.error('Error checking push state:', err);
       }
 
       setIsLoading(false);
@@ -49,7 +43,6 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     try {
       setIsLoading(true);
 
-      // Request permission
       const perm = await Notification.requestPermission();
       setPermission(perm);
 
@@ -58,15 +51,15 @@ export function usePushNotifications(): UsePushNotificationsReturn {
         return;
       }
 
+      // Register SW only when user opts in
+      await navigator.serviceWorker.register('/sw.js');
       const registration = await navigator.serviceWorker.ready;
 
-      // Subscribe to push
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
       });
 
-      // Send subscription to server
       const res = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,19 +81,17 @@ export function usePushNotifications(): UsePushNotificationsReturn {
     try {
       setIsLoading(true);
 
-      const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription();
-
-      if (subscription) {
-        // Tell server to remove it
-        await fetch('/api/push/unsubscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint: subscription.endpoint }),
-        });
-
-        // Unsubscribe locally
-        await subscription.unsubscribe();
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      if (registration) {
+        const subscription = await registration.pushManager.getSubscription();
+        if (subscription) {
+          await fetch('/api/push/unsubscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint: subscription.endpoint }),
+          });
+          await subscription.unsubscribe();
+        }
       }
 
       setIsSubscribed(false);
