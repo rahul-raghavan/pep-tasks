@@ -6,11 +6,23 @@ import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
 import { PepRecurringTask } from '@/types/database';
 import { describeRecurrence } from '@/lib/recurrence';
+import { formatDisplayName } from '@/lib/format-name';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { PRIORITY_COLORS } from '@/lib/constants/theme';
-import { Plus, RefreshCw } from 'lucide-react';
+import { Plus, RefreshCw, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function RecurringTasksPage() {
@@ -46,6 +58,16 @@ export default function RecurringTasksPage() {
       fetchTemplates();
     } else {
       toast.error('Failed to update');
+    }
+  }
+
+  async function deleteTemplate(id: string) {
+    const res = await fetch(`/api/recurring/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      toast.success('Recurring task deleted');
+      fetchTemplates();
+    } else {
+      toast.error('Failed to delete');
     }
   }
 
@@ -101,18 +123,58 @@ export default function RecurringTasksPage() {
                     </p>
                     <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
                       {t.assignee && (
-                        <span>Assigned to: {t.assignee.name || t.assignee.email.split('@')[0]}</span>
+                        <span>Assigned to: {formatDisplayName(t.assignee.name, t.assignee.email)}</span>
                       )}
                       <span>Next run: {t.next_run_date}</span>
                     </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => toggleActive(t.id, t.is_active)}
-                  >
-                    {t.is_active ? 'Pause' : 'Activate'}
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => router.push(`/recurring/${t.id}/edit`)}
+                      title="Edit"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete recurring task?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This will permanently deactivate &ldquo;{t.title}&rdquo;. Tasks already created from this template will not be affected.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => deleteTemplate(t.id)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Delete
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => toggleActive(t.id, t.is_active)}
+                    >
+                      {t.is_active ? 'Pause' : 'Activate'}
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

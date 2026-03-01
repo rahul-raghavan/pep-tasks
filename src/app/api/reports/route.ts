@@ -6,6 +6,7 @@ import { UserRole } from '@/types/database';
 import { startOfMonth, endOfMonth, parseISO } from 'date-fns';
 import { getTodayIST } from '@/lib/utils';
 import { getCenterUserIds } from '@/lib/centers';
+import { formatDisplayName } from '@/lib/format-name';
 
 interface PersonReport {
   user_id: string;
@@ -18,6 +19,7 @@ interface PersonReport {
   on_time: number;
   late: number;
   overdue: number;
+  avg_rating?: number | null;
 }
 
 // GET /api/reports?month=2026-02
@@ -105,9 +107,9 @@ export async function GET(request: Request) {
           t.status !== 'verified'
       );
 
-      return {
+      const report: PersonReport = {
         user_id: u.id,
-        name: u.name || u.email.split('@')[0],
+        name: formatDisplayName(u.name, u.email),
         email: u.email,
         role: u.role,
         assigned: userTasks.length,
@@ -117,6 +119,24 @@ export async function GET(request: Request) {
         late: late.length,
         overdue: overdue.length,
       };
+
+      // Avg rating: only for super_admins
+      if (user.role === 'super_admin') {
+        const ratedTasks = verified.filter(
+          (t) => t.verification_rating != null && t.verification_rating > 0
+        );
+        if (ratedTasks.length > 0) {
+          const sum = ratedTasks.reduce(
+            (acc: number, t) => acc + (t.verification_rating as number),
+            0
+          );
+          report.avg_rating = Math.round((sum / ratedTasks.length) * 10) / 10;
+        } else {
+          report.avg_rating = null;
+        }
+      }
+
+      return report;
     });
 
   return NextResponse.json(reports);

@@ -18,6 +18,7 @@ import {
 import { Plus, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { STATUS_COLORS, PRIORITY_COLORS, STATUS_LABELS } from '@/lib/constants/theme';
+import { formatDisplayName } from '@/lib/format-name';
 import { getCached, setCache } from '@/lib/cache';
 
 export default function TasksPage() {
@@ -160,7 +161,7 @@ export default function TasksPage() {
               <SelectItem value="all">All Assignees</SelectItem>
               {users.map((u) => (
                 <SelectItem key={u.id} value={u.id}>
-                  {u.name || u.email.split('@')[0]}
+                  {formatDisplayName(u.name, u.email)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -233,13 +234,13 @@ export default function TasksPage() {
                     {task.assignee && (
                       <span>
                         Assigned to{' '}
-                        {task.assignee.name || task.assignee.email.split('@')[0]}
+                        {formatDisplayName(task.assignee.name, task.assignee.email)}
                       </span>
                     )}
                     {task.delegate && (
                       <span className="text-muted-foreground">
                         Delegated to{' '}
-                        {task.delegate.name || task.delegate.email.split('@')[0]}
+                        {formatDisplayName(task.delegate.name, task.delegate.email)}
                       </span>
                     )}
                     {task.due_date && (

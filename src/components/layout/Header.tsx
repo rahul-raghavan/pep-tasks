@@ -1,6 +1,7 @@
 'use client';
 
 import { PepUser } from '@/types/database';
+import { formatDisplayName } from '@/lib/format-name';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -43,14 +44,14 @@ export function Header({ user, onSignOut }: HeaderProps) {
                 </AvatarFallback>
               </Avatar>
               <span className="text-sm font-medium text-[#333333] hidden sm:inline">
-                {user.name || user.email.split('@')[0]}
+                {formatDisplayName(user.name, user.email)}
               </span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuLabel>
               <div className="flex flex-col">
-                <span>{user.name || 'User'}</span>
+                <span>{formatDisplayName(user.name, user.email)}</span>
                 <span className="text-xs font-normal text-[#666666] truncate">
                   {user.email}
                 </span>

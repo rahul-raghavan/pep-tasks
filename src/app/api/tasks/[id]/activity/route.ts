@@ -59,12 +59,16 @@ export async function GET(
     }
   }
 
-  const { data, error } = await db
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+
+  const { data, error, count } = await db
     .from('pep_activity_log')
-    .select('id, task_id, user_id, action, details, created_at, user:pep_users!pep_activity_log_user_id_fkey(id, name, email)')
+    .select('id, task_id, user_id, action, details, created_at, user:pep_users!pep_activity_log_user_id_fkey(id, name, email)', { count: 'exact' })
     .eq('task_id', id)
     .order('created_at', { ascending: false })
-    .limit(50);
+    .range(offset, offset + limit - 1);
 
   if (error) {
     console.error('Error fetching activity:', error);
@@ -76,5 +80,5 @@ export async function GET(
     user: Array.isArray(log.user) ? log.user[0] : log.user,
   }));
 
-  return NextResponse.json(logs);
+  return NextResponse.json({ logs, total: count ?? logs.length });
 }

@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { UserPlus, ChevronDown, ChevronUp, Plus, X, Pencil } from 'lucide-react';
+import { formatDisplayName } from '@/lib/format-name';
 import { ROLE_COLORS } from '@/lib/constants/theme';
 
 export default function UsersPage() {
@@ -56,6 +57,7 @@ export default function UsersPage() {
 
   // Edit user dialog
   const [editingUser, setEditingUser] = useState<PepUser | null>(null);
+  const [editName, setEditName] = useState('');
   const [editCenterIds, setEditCenterIds] = useState<string[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -170,24 +172,41 @@ export default function UsersPage() {
 
   function openEditDialog(targetUser: PepUser) {
     setEditingUser(targetUser);
+    setEditName(targetUser.name || '');
     setEditCenterIds((targetUser.centers || []).map((c) => c.id));
   }
 
-  async function saveEditCenters() {
+  async function saveEditUser() {
     if (!editingUser) return;
     setSavingEdit(true);
+
+    const payload: Record<string, unknown> = {};
+    const trimmedName = editName.trim() || null;
+    if (trimmedName !== (editingUser.name || null)) {
+      payload.name = trimmedName;
+    }
+    if (user.role === 'super_admin') {
+      payload.center_ids = editCenterIds;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      setEditingUser(null);
+      setSavingEdit(false);
+      return;
+    }
+
     const res = await fetch(`/api/users/${editingUser.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ center_ids: editCenterIds }),
+      body: JSON.stringify(payload),
     });
     if (res.ok) {
-      toast.success('Centers updated');
+      toast.success('User updated');
       setEditingUser(null);
       fetchUsers();
     } else {
       const err = await res.json();
-      toast.error(err.error || 'Failed to update centers');
+      toast.error(err.error || 'Failed to update user');
     }
     setSavingEdit(false);
   }
@@ -399,7 +418,7 @@ export default function UsersPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-foreground">
-                    {u.name || u.email.split('@')[0]}
+                    {formatDisplayName(u.name, u.email)}
                   </span>
                   <Badge
                     variant="secondary"
@@ -459,16 +478,14 @@ export default function UsersPage() {
 
               {u.id !== user.id && (
                 <div className="flex items-center gap-2 shrink-0">
-                  {user.role === 'super_admin' && centers.length > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEditDialog(u)}
-                      title="Edit centers"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openEditDialog(u)}
+                    title="Edit user"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </Button>
                   <Select
                     value={u.role}
                     onValueChange={(v) => changeRole(u, v as UserRole)}
@@ -503,52 +520,65 @@ export default function UsersPage() {
         </div>
       )}
 
-      {/* Edit User Centers Dialog */}
+      {/* Edit User Dialog */}
       <Dialog open={!!editingUser} onOpenChange={(open) => !open && setEditingUser(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Centers</DialogTitle>
+            <DialogTitle>Edit User</DialogTitle>
             <DialogDescription>
-              Assign or remove centers for {editingUser?.name || editingUser?.email.split('@')[0]}
+              Update details for {editingUser?.email}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <Label>Centers</Label>
-            <div className="flex flex-wrap gap-2">
-              {centers.map((c) => {
-                const selected = editCenterIds.includes(c.id);
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() =>
-                      setEditCenterIds((prev) =>
-                        selected
-                          ? prev.filter((id) => id !== c.id)
-                          : [...prev, c.id]
-                      )
-                    }
-                    className={`text-sm px-4 py-2 rounded-full border transition-colors ${
-                      selected
-                        ? 'bg-[#5BB8D6]/15 text-[#3A8BA8] border-[#5BB8D6]/50 font-medium'
-                        : 'bg-transparent text-muted-foreground border-dashed hover:border-[#5BB8D6]/50'
-                    }`}
-                  >
-                    {c.name}
-                    {selected && <X className="w-3 h-3 ml-1.5 inline" />}
-                  </button>
-                );
-              })}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input
+                id="edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Full name"
+              />
             </div>
-            {editCenterIds.length === 0 && (
-              <p className="text-xs text-muted-foreground">No centers selected. Click a center to assign it.</p>
+            {user.role === 'super_admin' && centers.length > 0 && (
+              <div className="space-y-2">
+                <Label>Centers</Label>
+                <div className="flex flex-wrap gap-2">
+                  {centers.map((c) => {
+                    const selected = editCenterIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() =>
+                          setEditCenterIds((prev) =>
+                            selected
+                              ? prev.filter((id) => id !== c.id)
+                              : [...prev, c.id]
+                          )
+                        }
+                        className={`text-sm px-4 py-2 rounded-full border transition-colors ${
+                          selected
+                            ? 'bg-[#5BB8D6]/15 text-[#3A8BA8] border-[#5BB8D6]/50 font-medium'
+                            : 'bg-transparent text-muted-foreground border-dashed hover:border-[#5BB8D6]/50'
+                        }`}
+                      >
+                        {c.name}
+                        {selected && <X className="w-3 h-3 ml-1.5 inline" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                {editCenterIds.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No centers selected. Click a center to assign it.</p>
+                )}
+              </div>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingUser(null)} disabled={savingEdit}>
               Cancel
             </Button>
-            <Button onClick={saveEditCenters} disabled={savingEdit}>
+            <Button onClick={saveEditUser} disabled={savingEdit}>
               {savingEdit ? 'Saving...' : 'Save'}
             </Button>
           </DialogFooter>

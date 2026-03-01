@@ -68,22 +68,31 @@ export async function PATCH(
       return NextResponse.json({ error: 'Only super admins can assign centers' }, { status: 403 });
     }
 
-    // Delete existing center assignments
-    await db.from('pep_user_centers').delete().eq('user_id', id);
-
-    // Insert new assignments
     const centerIds = body.center_ids as string[];
+
+    // Insert new assignments first, then delete old ones — prevents data loss on insert failure
     if (centerIds.length > 0) {
+      // Use upsert to avoid conflicts with any centers that are staying
       const rows = centerIds.map((centerId: string) => ({
         user_id: id,
         center_id: centerId,
       }));
-      const { error: centerError } = await db.from('pep_user_centers').insert(rows);
+      const { error: centerError } = await db
+        .from('pep_user_centers')
+        .upsert(rows, { onConflict: 'user_id,center_id' });
       if (centerError) {
         console.error('Error assigning centers:', centerError);
         return NextResponse.json({ error: 'Failed to assign centers' }, { status: 500 });
       }
     }
+
+    // Now remove centers that are no longer in the list
+    // (or all centers if centerIds is empty)
+    let deleteQuery = db.from('pep_user_centers').delete().eq('user_id', id);
+    if (centerIds.length > 0) {
+      deleteQuery = deleteQuery.not('center_id', 'in', `(${centerIds.join(',')})`);
+    }
+    await deleteQuery;
   }
 
   if (Object.keys(updates).length === 0 && body.center_ids === undefined) {

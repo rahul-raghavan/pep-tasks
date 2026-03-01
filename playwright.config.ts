@@ -43,6 +43,17 @@ export default defineConfig({
       testMatch: /auth\.setup\.ts/,
     },
 
+    // Super admin tests — logged in as Test Rahul (super_admin)
+    {
+      name: 'super-admin-tests',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'e2e/auth/storageState.super_admin.json',
+      },
+      dependencies: ['setup'],
+      testMatch: /.*\.super-admin\.spec\.ts/,
+    },
+
     // Admin tests — logged in as Priya (admin)
     {
       name: 'admin-tests',
@@ -51,7 +62,7 @@ export default defineConfig({
         storageState: 'e2e/auth/storageState.admin.json',
       },
       dependencies: ['setup'],
-      testIgnore: /staff\//,
+      testIgnore: [/staff\//, /\.super-admin\.spec\.ts/],
     },
 
     // Staff tests — logged in as Amit (staff)

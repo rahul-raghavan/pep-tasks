@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
-import { isAdmin, canVerifyTasks, canDelegate, canDelegateTo, canCreatorEdit, canCreatorDelete } from '@/lib/permissions';
+import { isAdmin, canDelegate, canCreatorEdit, getVerificationRequirements } from '@/lib/permissions';
 import { isOverdue as checkOverdue } from '@/lib/utils';
-import { PepTask, PepComment, PepActivityLog, PepAttachment, PepUser, TaskStatus, TaskPriority } from '@/types/database';
+import { PepTask, PepComment, PepActivityLog, PepAttachment, PepUser, PepVerification, TaskStatus, TaskPriority } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,12 +30,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ArrowLeft, Clock, User, UserPlus, CalendarDays, Flag, Send, Pencil, Trash2, ShieldCheck, Paperclip, Download, FileText, Image, X } from 'lucide-react';
+import { ArrowLeft, Clock, User, UserPlus, CalendarDays, Flag, Send, Pencil, Trash2, ShieldCheck, Paperclip, Download, FileText, Image, X, Star } from 'lucide-react';
 import { format } from 'date-fns';
 import { STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
+import { formatDisplayName } from '@/lib/format-name';
 import { getCached, setCache } from '@/lib/cache';
 
-function formatActivityAction(log: PepActivityLog): string {
+function formatActivityAction(log: PepActivityLog, isWorker: boolean): string {
   const details = log.details || {};
   switch (log.action) {
     case 'created':
@@ -52,6 +53,15 @@ function formatActivityAction(log: PepActivityLog): string {
       return `attached ${(details.file_name as string) || 'a file'}`;
     case 'attachment_deleted':
       return `removed attachment ${(details.file_name as string) || ''}`;
+    case 'verified': {
+      const slot = details.slot as string;
+      const slotLabel = slot === 'assigned_by' ? 'assigner' : 'delegator';
+      if (isWorker) {
+        return `submitted verification (as ${slotLabel})`;
+      }
+      const rating = details.rating as number;
+      return `submitted verification (as ${slotLabel}, ${rating} star${rating !== 1 ? 's' : ''})`;
+    }
     case 'updated': {
       const parts: string[] = [];
       if (details.reassigned) parts.push('reassigned the task');
@@ -81,7 +91,9 @@ export default function TaskDetailPage() {
   const [staffUsers, setStaffUsers] = useState<PepUser[]>([]);
   const [allUsers, setAllUsers] = useState<PepUser[]>([]);
   const [delegating, setDelegating] = useState(false);
+  const [verifications, setVerifications] = useState<PepVerification[]>([]);
   const [showVerifyDialog, setShowVerifyDialog] = useState(false);
+  const [verificationRating, setVerificationRating] = useState<number>(0);
   const [verificationComment, setVerificationComment] = useState('');
 
   // Attachments state
@@ -102,7 +114,9 @@ export default function TaskDetailPage() {
   const fetchTask = useCallback(async () => {
     const res = await fetch(`/api/tasks/${taskId}`);
     if (res.ok) {
-      setTask(await res.json());
+      const data = await res.json();
+      setVerifications(data.verifications || []);
+      setTask(data);
     } else {
       const err = await res.json().catch(() => null);
       if (res.status === 403) {
@@ -116,17 +130,26 @@ export default function TaskDetailPage() {
 
   const fetchComments = useCallback(async () => {
     const res = await fetch(`/api/tasks/${taskId}/comments`);
-    if (res.ok) setComments(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setComments(data.comments ?? data);
+    }
   }, [taskId]);
 
   const fetchActivity = useCallback(async () => {
     const res = await fetch(`/api/tasks/${taskId}/activity`);
-    if (res.ok) setActivity(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setActivity(data.logs ?? data);
+    }
   }, [taskId]);
 
   const fetchAttachments = useCallback(async () => {
     const res = await fetch(`/api/tasks/${taskId}/attachments`);
-    if (res.ok) setAttachments(await res.json());
+    if (res.ok) {
+      const data = await res.json();
+      setAttachments(data.attachments ?? data);
+    }
   }, [taskId]);
 
   // Load task first (fast first render), then load secondary data
@@ -232,19 +255,35 @@ export default function TaskDetailPage() {
   }
 
   async function handleVerify() {
+    if (verificationRating === 0) {
+      toast.error('Please select a star rating');
+      return;
+    }
+    if (verificationRating <= 3 && !verificationComment.trim()) {
+      toast.error('A comment is required for ratings of 3 stars or below');
+      return;
+    }
+
     setUpdating(true);
     const res = await fetch(`/api/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         status: 'verified',
+        verification_rating: verificationRating,
         verification_comment: verificationComment || undefined,
       }),
     });
 
     if (res.ok) {
-      toast.success('Task verified');
+      const result = await res.json();
+      if (result._fullyVerified) {
+        toast.success('Task fully verified');
+      } else {
+        toast.success('Your verification has been recorded. Waiting for other verifiers.');
+      }
       setShowVerifyDialog(false);
+      setVerificationRating(0);
       setVerificationComment('');
       await Promise.all([fetchTask(), fetchComments(), fetchActivity()]);
     } else {
@@ -408,8 +447,16 @@ export default function TaskDetailPage() {
         });
         actions.push({ label: 'Reopen', status: 'open', variant: 'outline' });
         break;
-      case 'completed':
-        if (canVerifyTasks(user.role)) {
+      case 'completed': {
+        const req = getVerificationRequirements(
+          user.role,
+          user.id,
+          task.assigned_by,
+          task.assigned_to,
+          task.delegated_to,
+          verifications
+        );
+        if (req.canVerify) {
           actions.push({
             label: 'Verify',
             status: 'verified',
@@ -424,6 +471,7 @@ export default function TaskDetailPage() {
           });
         }
         break;
+      }
     }
 
     return actions;
@@ -444,16 +492,82 @@ export default function TaskDetailPage() {
   const actions = getAvailableActions();
   const isVerified = task.status === 'verified';
   const showEditDelete = canEditOrDelete();
+  const isWorker =
+    (task.delegated_to && task.delegated_to === user.id) ||
+    (!task.delegated_to && task.assigned_to === user.id);
+
+  // Build verification requirements for the progress section
+  const verificationReqs = task.status === 'completed' || task.status === 'verified'
+    ? getVerificationRequirements(
+        user.role,
+        user.id,
+        task.assigned_by,
+        task.assigned_to,
+        task.delegated_to,
+        verifications
+      )
+    : null;
 
   return (
     <div className="max-w-3xl space-y-6">
       {/* Verified Banner */}
       {isVerified && (
-        <div className="flex items-center gap-2 bg-[#9B8EC4]/10 border border-[#9B8EC4]/30 text-[#9B8EC4] rounded-lg px-4 py-3">
-          <ShieldCheck className="w-5 h-5 shrink-0" />
-          <span className="text-sm font-medium">
-            This task was verified on {format(new Date(task.verified_at!), 'MMM d, yyyy h:mm a')}
-          </span>
+        <div className="bg-[#9B8EC4]/10 border border-[#9B8EC4]/30 text-[#9B8EC4] rounded-lg px-4 py-3 space-y-1">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 shrink-0" />
+            <span className="text-sm font-medium">
+              Verified on {format(new Date(task.verified_at!), 'MMM d, yyyy h:mm a')}
+            </span>
+            {!isWorker && task.verification_rating && (
+              <span className="flex items-center gap-0.5 ml-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Star
+                    key={star}
+                    className={`w-4 h-4 ${
+                      star <= task.verification_rating!
+                        ? 'fill-[#E8A87C] text-[#E8A87C]'
+                        : 'text-[#9B8EC4]/30'
+                    }`}
+                  />
+                ))}
+              </span>
+            )}
+          </div>
+          {verifications.length > 0 && (
+            <div className="text-xs text-[#9B8EC4]/80 ml-7">
+              Verified by {verifications.map((v) => v.verifier_name).join(' and ')}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Verification Progress (show on completed tasks for admins) */}
+      {task.status === 'completed' && isAdmin(user.role) && verificationReqs && verificationReqs.slots.length > 0 && (
+        <div className="bg-[#E8A87C]/10 border border-[#E8A87C]/30 rounded-lg px-4 py-3">
+          <p className="text-sm font-medium text-[#E8A87C] mb-2">Verification Progress</p>
+          <div className="space-y-1.5">
+            {verificationReqs.slots.map((slot) => {
+              const verification = verifications.find((v) => v.verifier_role === slot.role);
+              return (
+                <div key={slot.role} className="flex items-center gap-2 text-sm">
+                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${slot.filled ? 'bg-[#7BC47F]' : 'bg-gray-300'}`} />
+                  <span className="text-foreground">
+                    {slot.label === 'assigner' ? 'Assigner' : 'Delegator'}
+                  </span>
+                  {slot.filled && verification ? (
+                    <span className="text-muted-foreground">
+                      — {verification.verifier_name}
+                      {!isWorker && verification.rating != null && (
+                        <span className="ml-1">({verification.rating} star{verification.rating !== 1 ? 's' : ''})</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">pending</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -517,20 +631,71 @@ export default function TaskDetailPage() {
           <DialogHeader>
             <DialogTitle>Verify Task</DialogTitle>
             <DialogDescription>
-              Mark this task as verified. You can optionally leave a comment.
+              Rate the quality of this task before verifying.
             </DialogDescription>
           </DialogHeader>
-          <Textarea
-            value={verificationComment}
-            onChange={(e) => setVerificationComment(e.target.value)}
-            placeholder="Optional comment (e.g., looks good, or feedback)..."
-            rows={3}
-          />
+          <div className="space-y-4">
+            {/* Star Rating */}
+            <div className="space-y-2">
+              <Label>Rating *</Label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setVerificationRating(star)}
+                    className="p-0.5 transition-transform hover:scale-110 focus:outline-none"
+                  >
+                    <Star
+                      className={`w-8 h-8 ${
+                        star <= verificationRating
+                          ? 'fill-[#E8A87C] text-[#E8A87C]'
+                          : 'text-gray-300'
+                      }`}
+                    />
+                  </button>
+                ))}
+                {verificationRating > 0 && (
+                  <span className="text-sm text-muted-foreground ml-2">
+                    {verificationRating === 1 && 'Poor'}
+                    {verificationRating === 2 && 'Below expectations'}
+                    {verificationRating === 3 && 'Meets expectations'}
+                    {verificationRating === 4 && 'Good'}
+                    {verificationRating === 5 && 'Excellent'}
+                  </span>
+                )}
+              </div>
+            </div>
+            {/* Comment */}
+            <div className="space-y-2">
+              <Label>
+                Comment {verificationRating > 0 && verificationRating <= 3 ? '*' : '(optional)'}
+              </Label>
+              <Textarea
+                value={verificationComment}
+                onChange={(e) => setVerificationComment(e.target.value)}
+                placeholder={
+                  verificationRating > 0 && verificationRating <= 3
+                    ? 'Please explain what could be improved...'
+                    : 'Optional comment (e.g., looks good, or feedback)...'
+                }
+                rows={3}
+              />
+              {verificationRating > 0 && verificationRating <= 3 && !verificationComment.trim() && (
+                <p className="text-xs text-[#D4705A]">
+                  A comment is required for ratings of 3 stars or below
+                </p>
+              )}
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowVerifyDialog(false)} disabled={updating}>
               Cancel
             </Button>
-            <Button onClick={handleVerify} disabled={updating}>
+            <Button
+              onClick={handleVerify}
+              disabled={updating || verificationRating === 0 || (verificationRating <= 3 && !verificationComment.trim())}
+            >
               {updating ? 'Verifying...' : 'Verify'}
             </Button>
           </DialogFooter>
@@ -574,7 +739,7 @@ export default function TaskDetailPage() {
                   <SelectContent>
                     {allUsers.map((u) => (
                       <SelectItem key={u.id} value={u.id}>
-                        {u.name || u.email.split('@')[0]}
+                        {formatDisplayName(u.name, u.email)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -662,7 +827,7 @@ export default function TaskDetailPage() {
                     .filter((u) => u.id !== task.delegated_to)
                     .map((u) => (
                       <SelectItem key={u.id} value={u.id}>
-                        {u.name || u.email.split('@')[0]}
+                        {formatDisplayName(u.name, u.email)}
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -679,7 +844,7 @@ export default function TaskDetailPage() {
               <SelectContent>
                 {staffUsers.map((u) => (
                   <SelectItem key={u.id} value={u.id}>
-                    {u.name || u.email.split('@')[0]}
+                    {formatDisplayName(u.name, u.email)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -710,7 +875,7 @@ export default function TaskDetailPage() {
               <span>Assigned to: </span>
               <span className="font-medium text-foreground">
                 {task.assignee
-                  ? task.assignee.name || task.assignee.email.split('@')[0]
+                  ? formatDisplayName(task.assignee.name, task.assignee.email)
                   : 'Unassigned'}
               </span>
             </div>
@@ -720,7 +885,7 @@ export default function TaskDetailPage() {
               <span>Assigned by: </span>
               <span className="font-medium text-foreground">
                 {task.assigner
-                  ? task.assigner.name || task.assigner.email.split('@')[0]
+                  ? formatDisplayName(task.assigner.name, task.assigner.email)
                   : 'Unknown'}
               </span>
             </div>
@@ -730,7 +895,7 @@ export default function TaskDetailPage() {
                 <UserPlus className="w-4 h-4" />
                 <span>Delegated to: </span>
                 <span className="font-medium text-foreground">
-                  {task.delegate.name || task.delegate.email.split('@')[0]}
+                  {formatDisplayName(task.delegate.name, task.delegate.email)}
                 </span>
               </div>
             )}
@@ -818,7 +983,7 @@ export default function TaskDetailPage() {
                     <p className="text-xs text-muted-foreground">
                       {formatFileSize(attachment.file_size)}
                       {' \u00b7 '}
-                      {attachment.uploader?.name || attachment.uploader?.email?.split('@')[0] || 'Unknown'}
+                      {formatDisplayName(attachment.uploader?.name, attachment.uploader?.email)}
                       {' \u00b7 '}
                       {format(new Date(attachment.created_at), 'MMM d, yyyy')}
                     </p>
@@ -897,9 +1062,7 @@ export default function TaskDetailPage() {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium">
-                        {comment.author?.name ||
-                          comment.author?.email.split('@')[0] ||
-                          'Unknown'}
+                        {formatDisplayName(comment.author?.name, comment.author?.email)}
                       </span>
                       {comment.context === 'verification' && (
                         <Badge variant="secondary" className="bg-[#9B8EC4]/15 text-[#9B8EC4] text-[10px] px-1.5 py-0">
@@ -938,10 +1101,10 @@ export default function TaskDetailPage() {
                       <div className="w-2 h-2 mt-1.5 rounded-full bg-[#5BB8D6] shrink-0" />
                       <div>
                         <span className="font-medium">
-                          {log.user?.name || 'Someone'}
+                          {formatDisplayName(log.user?.name, log.user?.email)}
                         </span>{' '}
                         <span className="text-muted-foreground">
-                          {formatActivityAction(log)}
+                          {formatActivityAction(log, !!isWorker)}
                         </span>
                         <div className="text-xs text-muted-foreground mt-0.5">
                           {format(

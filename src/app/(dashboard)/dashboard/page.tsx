@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ListTodo, MessageSquare, User, Users, RefreshCw } from 'lucide-react';
 import { isAdmin } from '@/lib/permissions';
+import { formatDisplayName } from '@/lib/format-name';
 import { isOverdue as checkOverdue } from '@/lib/utils';
 import { ROLE_COLORS, STATUS_COLORS, STATUS_LABELS, PRIORITY_COLORS } from '@/lib/constants/theme';
 import { TimelineItem, TaskStatus, TaskPriority, DashboardComment } from '@/types/database';
@@ -22,6 +23,8 @@ interface TaskSummary {
   assigned_to: string | null;
   assigned_by: string | null;
   assigned_to_name?: string | null;
+  delegated_to?: string | null;
+  delegated_to_name?: string | null;
 }
 
 interface DashboardStats {
@@ -83,7 +86,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl pep-heading">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
-            Welcome back, {user.name || user.email.split('@')[0]}
+            Welcome back, {formatDisplayName(user.name, user.email)}
           </p>
         </div>
         <Button
@@ -241,6 +244,9 @@ export default function DashboardPage() {
                               {t.assigned_to_name && (
                                 <span className="text-[11px] text-muted-foreground">{t.assigned_to_name}</span>
                               )}
+                              {t.delegated_to_name && (
+                                <span className="text-[11px] text-[#9B8EC4]">(delegated to {t.delegated_to_name})</span>
+                              )}
                             </div>
                           </div>
                           {t.due_date && (
@@ -358,6 +364,16 @@ export default function DashboardPage() {
                       ) : item.action === 'undelegated' ? (
                         <>
                           {' removed delegation from '}
+                          <span className="font-medium">{item.task_title}</span>
+                        </>
+                      ) : item.action === 'attachment_added' ? (
+                        <>
+                          {' attached a file to '}
+                          <span className="font-medium">{item.task_title}</span>
+                        </>
+                      ) : item.action === 'verified' ? (
+                        <>
+                          {' verified '}
                           <span className="font-medium">{item.task_title}</span>
                         </>
                       ) : (

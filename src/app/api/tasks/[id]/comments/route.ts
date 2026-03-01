@@ -72,12 +72,16 @@ export async function GET(
     }
   }
 
-  const { data, error } = await db
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+
+  const { data, error, count } = await db
     .from('pep_comments')
-    .select('*, author:pep_users!pep_comments_author_id_fkey(id, name, email)')
+    .select('*, author:pep_users!pep_comments_author_id_fkey(id, name, email)', { count: 'exact' })
     .eq('task_id', id)
     .order('created_at', { ascending: true })
-    .limit(50);
+    .range(offset, offset + limit - 1);
 
   if (error) {
     return NextResponse.json({ error: 'Failed to fetch comments' }, { status: 500 });
@@ -88,7 +92,7 @@ export async function GET(
     author: Array.isArray(c.author) ? c.author[0] : c.author,
   }));
 
-  return NextResponse.json(comments);
+  return NextResponse.json({ comments, total: count ?? comments.length });
 }
 
 // POST /api/tasks/[id]/comments

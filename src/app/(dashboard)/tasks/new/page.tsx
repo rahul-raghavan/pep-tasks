@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
 import { PepUser } from '@/types/database';
+import { formatDisplayName } from '@/lib/format-name';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -152,7 +153,7 @@ export default function NewTaskPage() {
                   <SelectContent>
                     {users.map((u) => (
                       <SelectItem key={u.id} value={u.id}>
-                        {u.name || u.email.split('@')[0]}
+                        {formatDisplayName(u.name, u.email)}
                         <span className="text-muted-foreground ml-1 text-xs capitalize">
                           ({u.role.replace('_', ' ')})
                         </span>

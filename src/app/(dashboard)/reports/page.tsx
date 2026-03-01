@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Star } from 'lucide-react';
 import { format, subMonths, addMonths } from 'date-fns';
 import { ROLE_COLORS } from '@/lib/constants/theme';
 
@@ -24,6 +24,7 @@ interface PersonReport {
   on_time: number;
   late: number;
   overdue: number;
+  avg_rating?: number | null;
 }
 
 export default function ReportsPage() {
@@ -131,6 +132,11 @@ export default function ReportsPage() {
                     <th className="py-2 px-3 font-medium text-muted-foreground text-center">
                       Overdue
                     </th>
+                    {user.role === 'super_admin' && (
+                      <th className="py-2 px-3 font-medium text-muted-foreground text-center">
+                        Avg Rating
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -159,6 +165,18 @@ export default function ReportsPage() {
                       <td className="py-3 px-3 text-center text-[#D4705A] font-medium">
                         {r.overdue}
                       </td>
+                      {user.role === 'super_admin' && (
+                        <td className="py-3 px-3 text-center">
+                          {r.avg_rating != null ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Star className="w-3.5 h-3.5 fill-[#E8A87C] text-[#E8A87C]" />
+                              <span className="font-medium">{r.avg_rating}</span>
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

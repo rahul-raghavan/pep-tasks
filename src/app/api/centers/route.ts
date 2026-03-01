@@ -2,10 +2,14 @@ import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
 import { getCurrentUser } from '@/lib/auth';
 
-// GET /api/centers — list active centers
+// GET /api/centers — list active centers (admin+ only)
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  if (user.role === 'staff') {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const db = createServiceRoleClient();
   const { data, error } = await db

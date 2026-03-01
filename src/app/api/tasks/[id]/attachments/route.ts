@@ -77,12 +77,16 @@ export async function GET(
     return NextResponse.json({ error: access.error }, { status: access.status || 403 });
   }
 
-  const { data, error } = await db
+  const url = new URL(request.url);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '30'), 100);
+  const offset = parseInt(url.searchParams.get('offset') || '0');
+
+  const { data, error, count } = await db
     .from('pep_attachments')
-    .select('id, task_id, uploaded_by, file_name, file_size, mime_type, storage_path, created_at, uploader:pep_users!pep_attachments_uploaded_by_fkey(id, name, email)')
+    .select('id, task_id, uploaded_by, file_name, file_size, mime_type, storage_path, created_at, uploader:pep_users!pep_attachments_uploaded_by_fkey(id, name, email)', { count: 'exact' })
     .eq('task_id', id)
     .order('created_at', { ascending: false })
-    .limit(30);
+    .range(offset, offset + limit - 1);
 
   if (error) {
     console.error('Error fetching attachments:', error);
@@ -94,7 +98,7 @@ export async function GET(
     uploader: Array.isArray(a.uploader) ? a.uploader[0] : a.uploader,
   }));
 
-  return NextResponse.json(attachments);
+  return NextResponse.json({ attachments, total: count ?? attachments.length });
 }
 
 // POST /api/tasks/[id]/attachments — upload a file

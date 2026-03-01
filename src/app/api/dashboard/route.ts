@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
 import { getCurrentUser } from '@/lib/auth';
-import { isAdmin } from '@/lib/permissions';
+import { isAdmin, getVerificationRequirements } from '@/lib/permissions';
 import { startOfWeek, endOfWeek } from 'date-fns';
 import { getTodayIST } from '@/lib/utils';
 import { TimelineItem, TaskStatus, DashboardComment } from '@/types/database';
 import { getCenterUserIds } from '@/lib/centers';
+import { formatDisplayName } from '@/lib/format-name';
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -65,7 +66,7 @@ export async function GET() {
       const { data: logs } = await db
         .from('pep_activity_log')
         .select('id, task_id, user_id, action, details, created_at')
-        .in('action', ['created', 'status_changed', 'delegated', 'undelegated'])
+        .in('action', ['created', 'status_changed', 'delegated', 'undelegated', 'verified', 'attachment_added'])
         .in('task_id', taskIds)
         .order('created_at', { ascending: false })
         .limit(10);
@@ -79,7 +80,7 @@ export async function GET() {
       const { data: logs } = await db
         .from('pep_activity_log')
         .select('id, task_id, user_id, action, details, created_at')
-        .in('action', ['created', 'status_changed', 'delegated', 'undelegated'])
+        .in('action', ['created', 'status_changed', 'delegated', 'undelegated', 'verified', 'attachment_added'])
         .order('created_at', { ascending: false })
         .limit(50); // fetch extra for post-filtering
 
@@ -109,37 +110,71 @@ export async function GET() {
     })();
   }
 
-  // Pending verification count (admin+ only)
-  let pendingVerificationQuery = null;
+  // Pending verification count — personalized: tasks where THIS user has a pending slot
+  let pendingVerificationPromise: Promise<number> | null = null;
   if (isAdmin(user.role)) {
-    let pvQuery = db
-      .from('pep_tasks')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'completed');
-    if (user.role === 'admin' && adminVisibleUserIds) {
-      pvQuery = adminVisibleUserIds.length > 0
-        ? pvQuery.in('assigned_to', adminVisibleUserIds)
-        : pvQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
-    }
-    pendingVerificationQuery = pvQuery;
+    pendingVerificationPromise = (async () => {
+      // Fetch completed tasks visible to this user
+      let pvQuery = db
+        .from('pep_tasks')
+        .select('id, assigned_by, assigned_to, delegated_to')
+        .eq('status', 'completed');
+      if (user.role === 'admin' && adminVisibleUserIds) {
+        pvQuery = adminVisibleUserIds.length > 0
+          ? pvQuery.in('assigned_to', adminVisibleUserIds)
+          : pvQuery.eq('assigned_to', '00000000-0000-0000-0000-000000000000');
+      }
+      const { data: completedTasks } = await pvQuery;
+      if (!completedTasks || completedTasks.length === 0) return 0;
+
+      // Fetch existing verifications for those tasks
+      const taskIds = completedTasks.map((t: { id: string }) => t.id);
+      const { data: existingVerifications } = await db
+        .from('pep_verifications')
+        .select('task_id, verifier_role')
+        .in('task_id', taskIds);
+
+      // Group verifications by task
+      const verificationsByTask = new Map<string, Array<{ verifier_role: string }>>();
+      for (const v of (existingVerifications || [])) {
+        const existing = verificationsByTask.get(v.task_id) || [];
+        existing.push({ verifier_role: v.verifier_role });
+        verificationsByTask.set(v.task_id, existing);
+      }
+
+      // Count tasks where this user can verify
+      let count = 0;
+      for (const task of completedTasks) {
+        const slots = verificationsByTask.get(task.id) || [];
+        const req = getVerificationRequirements(
+          user.role,
+          user.id,
+          task.assigned_by,
+          task.assigned_to,
+          task.delegated_to,
+          slots
+        );
+        if (req.canVerify) count++;
+      }
+      return count;
+    })();
   }
 
-  // "Your Tasks" — tasks assigned to me (active, not verified)
+  // "Your Tasks" — tasks assigned to me OR delegated to me (active, not verified)
   const myTasksPromise = db
     .from('pep_tasks')
     .select('id, title, status, priority, due_date, assigned_to, assigned_by')
-    .eq('assigned_to', user.id)
+    .or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`)
     .in('status', ['open', 'in_progress', 'completed'])
     .order('due_date', { ascending: true, nullsFirst: false })
     .limit(10);
 
-  // "Assigned by You" — tasks I created for others (admin+ only, active, not verified)
+  // "Assigned by You" — tasks I created for others OR tasks assigned to me that I delegated
   const assignedByMePromise = isAdmin(user.role)
     ? db
         .from('pep_tasks')
-        .select('id, title, status, priority, due_date, assigned_to, assigned_by')
-        .eq('assigned_by', user.id)
-        .neq('assigned_to', user.id)
+        .select('id, title, status, priority, due_date, assigned_to, assigned_by, delegated_to')
+        .or(`and(assigned_by.eq.${user.id},assigned_to.neq.${user.id}),and(assigned_to.eq.${user.id},delegated_to.not.is.null)`)
         .in('status', ['open', 'in_progress', 'completed'])
         .order('due_date', { ascending: true, nullsFirst: false })
         .limit(10)
@@ -194,7 +229,7 @@ export async function GET() {
     const authorMap = new Map(
       (authors || []).map((u: { id: string; name: string | null; email: string }) => [
         u.id,
-        u.name || u.email.split('@')[0],
+        formatDisplayName(u.name, u.email),
       ])
     );
 
@@ -209,10 +244,10 @@ export async function GET() {
     }));
   })();
 
-  const [activeRes, timeline, pendingRes, myTasksRes, assignedByMeRes, recentComments] = await Promise.all([
+  const [activeRes, timeline, pendingVerificationCount, myTasksRes, assignedByMeRes, recentComments] = await Promise.all([
     activeQuery,
     timelinePromise,
-    pendingVerificationQuery,
+    pendingVerificationPromise,
     myTasksPromise,
     assignedByMePromise,
     recentCommentsPromise,
@@ -230,23 +265,28 @@ export async function GET() {
     }
   }
 
-  // For "Assigned by You", resolve assignee names
+  // For "Assigned by You", resolve assignee and delegate names
   let assignedByMe: Array<Record<string, unknown>> = [];
   if (assignedByMeRes.data && assignedByMeRes.data.length > 0) {
-    const assigneeIds = [...new Set(assignedByMeRes.data.map((t: { assigned_to: string | null }) => t.assigned_to).filter(Boolean))] as string[];
+    const userIdsToResolve = [
+      ...assignedByMeRes.data.map((t: { assigned_to: string | null }) => t.assigned_to),
+      ...assignedByMeRes.data.map((t: { delegated_to: string | null }) => t.delegated_to),
+    ].filter(Boolean);
+    const uniqueIds = [...new Set(userIdsToResolve)] as string[];
     let nameMap = new Map<string, string>();
-    if (assigneeIds.length > 0) {
-      const { data: assigneeUsers } = await db
+    if (uniqueIds.length > 0) {
+      const { data: resolvedUsers } = await db
         .from('pep_users')
         .select('id, name, email')
-        .in('id', assigneeIds);
+        .in('id', uniqueIds);
       nameMap = new Map(
-        (assigneeUsers || []).map((u: { id: string; name: string | null; email: string }) => [u.id, u.name || u.email.split('@')[0]])
+        (resolvedUsers || []).map((u: { id: string; name: string | null; email: string }) => [u.id, formatDisplayName(u.name, u.email)])
       );
     }
     assignedByMe = assignedByMeRes.data.map((t: Record<string, unknown>) => ({
       ...t,
       assigned_to_name: nameMap.get(t.assigned_to as string) || null,
+      delegated_to_name: t.delegated_to ? (nameMap.get(t.delegated_to as string) || null) : null,
     }));
   }
 
@@ -258,7 +298,7 @@ export async function GET() {
     myTasks: myTasksRes.data || [],
     assignedByMe,
     recentComments,
-    ...(pendingRes ? { pendingVerification: pendingRes.count || 0 } : {}),
+    ...(pendingVerificationCount != null ? { pendingVerification: pendingVerificationCount } : {}),
   });
 }
 
@@ -287,7 +327,7 @@ async function enrichTimeline(
   const userMap = new Map(
     (users || []).map((u: { id: string; name: string | null; email: string }) => [
       u.id,
-      u.name || u.email.split('@')[0],
+      formatDisplayName(u.name, u.email),
     ])
   );
 
@@ -304,7 +344,7 @@ async function enrichTimeline(
       .select('id, name, email')
       .in('id', assigneeIds);
     (assigneeUsers || []).forEach((u: { id: string; name: string | null; email: string }) => {
-      userMap.set(u.id, u.name || u.email.split('@')[0]);
+      userMap.set(u.id, formatDisplayName(u.name, u.email));
     });
   }
 

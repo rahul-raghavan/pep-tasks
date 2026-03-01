@@ -80,10 +80,10 @@ export async function POST(request: Request) {
     );
   }
 
-  // 4. Ensure pep_users record exists and link auth_id
+  // 4. Ensure pep_users record exists, is active, and has correct auth_id
   const { data: pepUser } = await serviceDb
     .from('pep_users')
-    .select('id, auth_id')
+    .select('id, auth_id, is_active')
     .eq('email', email.toLowerCase())
     .single();
 
@@ -96,11 +96,17 @@ export async function POST(request: Request) {
       auth_id: authUserId,
       is_active: true,
     });
-  } else if (!pepUser.auth_id) {
-    await serviceDb
-      .from('pep_users')
-      .update({ auth_id: authUserId })
-      .eq('id', pepUser.id);
+  } else {
+    // Always ensure auth_id is linked and user is active
+    const updates: Record<string, unknown> = {};
+    if (pepUser.auth_id !== authUserId) updates.auth_id = authUserId;
+    if (!pepUser.is_active) updates.is_active = true;
+    if (Object.keys(updates).length > 0) {
+      await serviceDb
+        .from('pep_users')
+        .update(updates)
+        .eq('id', pepUser.id);
+    }
   }
 
   // 5. Set session cookies in the Supabase SSR format

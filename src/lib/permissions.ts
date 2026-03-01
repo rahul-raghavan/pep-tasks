@@ -26,6 +26,113 @@ export function canVerifyTasks(role: UserRole): boolean {
   return role === 'super_admin' || role === 'admin';
 }
 
+// --- Multi-verification helpers ---
+
+export interface VerificationSlot {
+  role: 'assigned_by' | 'assigned_to';
+  userId: string;
+  label: string; // "assigner" or "delegator"
+  filled: boolean;
+}
+
+export interface VerificationRequirements {
+  slots: VerificationSlot[];
+  canVerify: boolean;
+  availableSlot: 'assigned_by' | 'assigned_to' | null;
+}
+
+/**
+ * Determine which verification slots are required for a task,
+ * and whether the current user can fill one.
+ */
+export function getVerificationRequirements(
+  userRole: UserRole,
+  userId: string,
+  assignedBy: string | null,
+  assignedTo: string | null,
+  delegatedTo: string | null,
+  filledSlots: Array<{ verifier_role: string }>
+): VerificationRequirements {
+  const filledSet = new Set(filledSlots.map((s) => s.verifier_role));
+
+  // Build required slots
+  const slots: VerificationSlot[] = [];
+
+  // assigned_by always verifies (as "assigner")
+  if (assignedBy) {
+    slots.push({
+      role: 'assigned_by',
+      userId: assignedBy,
+      label: 'assigner',
+      filled: filledSet.has('assigned_by'),
+    });
+  }
+
+  // For delegated tasks, assigned_to also verifies (as "delegator")
+  // But only if assigned_to is a different person from assigned_by
+  if (delegatedTo && assignedTo && assignedTo !== assignedBy) {
+    slots.push({
+      role: 'assigned_to',
+      userId: assignedTo,
+      label: 'delegator',
+      filled: filledSet.has('assigned_to'),
+    });
+  }
+
+  // Determine if current user can fill any slot
+  let canVerify = false;
+  let availableSlot: 'assigned_by' | 'assigned_to' | null = null;
+
+  // Staff can never verify
+  if (userRole === 'staff') {
+    return { slots, canVerify: false, availableSlot: null };
+  }
+
+  // Super_admin can fill any unfilled slot
+  if (userRole === 'super_admin') {
+    const unfilled = slots.find((s) => !s.filled);
+    if (unfilled) {
+      canVerify = true;
+      availableSlot = unfilled.role;
+    }
+    return { slots, canVerify, availableSlot };
+  }
+
+  // Regular admin: can only fill slots where they are the designated verifier
+  for (const slot of slots) {
+    if (!slot.filled && slot.userId === userId) {
+      canVerify = true;
+      availableSlot = slot.role;
+      break;
+    }
+  }
+
+  return { slots, canVerify, availableSlot };
+}
+
+/**
+ * Check if all required verification slots are filled.
+ */
+export function isFullyVerified(
+  delegatedTo: string | null,
+  assignedBy: string | null,
+  assignedTo: string | null,
+  filledSlots: Array<{ verifier_role: string }>
+): boolean {
+  const filledSet = new Set(filledSlots.map((s) => s.verifier_role));
+
+  // assigned_by slot is always required
+  if (assignedBy && !filledSet.has('assigned_by')) return false;
+
+  // For delegated tasks where assigned_to differs from assigned_by,
+  // assigned_to slot is also required
+  if (delegatedTo && assignedTo && assignedTo !== assignedBy) {
+    if (!filledSet.has('assigned_to')) return false;
+  }
+
+  return true;
+}
+
 export function isAdmin(role: UserRole): boolean {
   return role === 'super_admin' || role === 'admin';
 }

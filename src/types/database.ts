@@ -32,6 +32,18 @@ export interface PepUser {
   centers?: PepCenter[];
 }
 
+export interface PepVerification {
+  id: string;
+  task_id: string;
+  verifier_id: string;
+  verifier_role: 'assigned_by' | 'assigned_to';
+  rating: number;
+  comment_id: string | null;
+  created_at: string;
+  // Joined
+  verifier_name?: string;
+}
+
 export interface PepTask {
   id: string;
   title: string;
@@ -45,12 +57,14 @@ export interface PepTask {
   completed_at: string | null;
   verified_by: string | null;
   verified_at: string | null;
+  verification_rating: number | null;
   created_at: string;
   updated_at: string;
   // Joined fields
   assignee?: PepUser;
   assigner?: PepUser;
   delegate?: PepUser;
+  verifications?: PepVerification[];
 }
 
 export interface PepComment {
@@ -70,7 +84,7 @@ export interface TimelineItem {
   task_id: string;
   task_title: string;
   actor_name: string;
-  action: 'created' | 'status_changed' | 'delegated' | 'undelegated';
+  action: 'created' | 'status_changed' | 'delegated' | 'undelegated' | 'verified' | 'attachment_added';
   from_status: TaskStatus | null;
   to_status: TaskStatus | null;
   assigned_to_id: string | null;

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { PepUser } from '@/types/database';
+import { formatDisplayName } from '@/lib/format-name';
 import { isAdmin } from '@/lib/permissions';
 import { NAV_ITEMS, ADMIN_NAV_ITEMS } from '@/lib/constants/theme';
 
@@ -76,7 +77,7 @@ export function Sidebar({ user }: SidebarProps) {
 
       <div className="p-4 border-t border-[#E5E4E2]">
         <div className="text-xs text-[#666666]">
-          {user.name || user.email.split('@')[0]}
+          {formatDisplayName(user.name, user.email)}
         </div>
         <div className="text-xs text-[#888888] capitalize">{user.role.replace('_', ' ')}</div>
       </div>

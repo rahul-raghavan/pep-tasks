@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
 import { PepUser, RecurrenceRule, RecurrenceType } from '@/types/database';
@@ -23,11 +23,13 @@ import { ArrowLeft } from 'lucide-react';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export default function NewRecurringTaskPage() {
+export default function EditRecurringTaskPage() {
   const { user } = useUserContext();
   const router = useRouter();
+  const { id } = useParams<{ id: string }>();
   const [users, setUsers] = useState<PepUser[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingTemplate, setLoadingTemplate] = useState(true);
 
   // Task fields
   const [title, setTitle] = useState('');
@@ -38,16 +40,11 @@ export default function NewRecurringTaskPage() {
   // Recurrence fields
   const [recurrenceType, setRecurrenceType] = useState<RecurrenceType>('weekly');
   const [interval, setInterval] = useState(1);
-  const [weeklyDays, setWeeklyDays] = useState<number[]>([1]); // Default: Monday
+  const [weeklyDays, setWeeklyDays] = useState<number[]>([1]);
   const [monthlyDay, setMonthlyDay] = useState(1);
   const [monthlyPattern, setMonthlyPattern] = useState<'day_number' | 'last_day'>('day_number');
   const [lastDayName, setLastDayName] = useState('friday');
-
-  // First run date
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-  const [nextRunDate, setNextRunDate] = useState(tomorrowStr);
+  const [nextRunDate, setNextRunDate] = useState('');
 
   useEffect(() => {
     if (!isAdmin(user.role)) {
@@ -55,11 +52,45 @@ export default function NewRecurringTaskPage() {
       return;
     }
     fetchUsers();
-  }, [user.role, router]);
+    fetchTemplate();
+  }, [user.role, router, id]);
 
   async function fetchUsers() {
     const res = await fetch('/api/users');
     if (res.ok) setUsers(await res.json());
+  }
+
+  async function fetchTemplate() {
+    const res = await fetch(`/api/recurring/${id}`);
+    if (!res.ok) {
+      toast.error('Failed to load template');
+      router.push('/recurring');
+      return;
+    }
+    const t = await res.json();
+    setTitle(t.title);
+    setDescription(t.description || '');
+    setAssignedTo(t.assigned_to || 'unassigned');
+    setPriority(t.priority);
+    setNextRunDate(t.next_run_date);
+
+    // Parse recurrence_rule
+    const rule: RecurrenceRule = t.recurrence_rule;
+    setRecurrenceType(rule.type);
+    setInterval(rule.interval);
+    if (rule.type === 'weekly' && rule.days) {
+      setWeeklyDays(rule.days);
+    }
+    if (rule.type === 'monthly' && rule.day !== undefined) {
+      if (typeof rule.day === 'string' && rule.day.startsWith('last_')) {
+        setMonthlyPattern('last_day');
+        setLastDayName(rule.day.replace('last_', ''));
+      } else {
+        setMonthlyPattern('day_number');
+        setMonthlyDay(typeof rule.day === 'number' ? rule.day : 1);
+      }
+    }
+    setLoadingTemplate(false);
   }
 
   function toggleWeeklyDay(day: number) {
@@ -96,8 +127,8 @@ export default function NewRecurringTaskPage() {
     }
 
     setSubmitting(true);
-    const res = await fetch('/api/recurring', {
-      method: 'POST',
+    const res = await fetch(`/api/recurring/${id}`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title,
@@ -110,16 +141,24 @@ export default function NewRecurringTaskPage() {
     });
 
     if (res.ok) {
-      toast.success('Recurring task created');
+      toast.success('Recurring task updated');
       router.push('/recurring');
     } else {
       const err = await res.json();
-      toast.error(err.error || 'Failed to create');
+      toast.error(err.error || 'Failed to update');
     }
     setSubmitting(false);
   }
 
   if (!isAdmin(user.role)) return null;
+
+  if (loadingTemplate) {
+    return (
+      <div className="max-w-2xl">
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -127,7 +166,7 @@ export default function NewRecurringTaskPage() {
         <Button variant="ghost" size="sm" onClick={() => router.push('/recurring')}>
           <ArrowLeft className="w-4 h-4" />
         </Button>
-        <h1 className="text-2xl pep-heading">New Recurring Task</h1>
+        <h1 className="text-2xl pep-heading">Edit Recurring Task</h1>
       </div>
 
       <Card>
@@ -319,9 +358,9 @@ export default function NewRecurringTaskPage() {
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="first_run">First run date</Label>
+                <Label htmlFor="next_run">Next run date</Label>
                 <Input
-                  id="first_run"
+                  id="next_run"
                   type="date"
                   value={nextRunDate}
                   onChange={(e) => setNextRunDate(e.target.value)}
@@ -331,7 +370,7 @@ export default function NewRecurringTaskPage() {
 
             <div className="flex gap-3 pt-4">
               <Button type="submit" disabled={submitting} className="uppercase tracking-wider">
-                {submitting ? 'Creating...' : 'Create Recurring Task'}
+                {submitting ? 'Saving...' : 'Save Changes'}
               </Button>
               <Button
                 type="button"

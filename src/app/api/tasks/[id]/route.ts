@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createServiceRoleClient } from '@/lib/supabase/server';
-import { isAdmin, canVerifyTasks, canManageTask, canAssignTo, canDelegate, canDelegateTo, canCreatorDelete, isWithinEditWindow } from '@/lib/permissions';
+import { isAdmin, canVerifyTasks, canAssignTo, canDelegate, canDelegateTo, canCreatorDelete, isWithinEditWindow, getVerificationRequirements, isFullyVerified } from '@/lib/permissions';
 import { getCurrentUser } from '@/lib/auth';
 import { getCenterUserIds } from '@/lib/centers';
 import { sendPushNotification } from '@/lib/notifications';
+import { formatDisplayName } from '@/lib/format-name';
 
 // GET /api/tasks/[id] — get single task with joins
 export async function GET(
@@ -18,7 +19,7 @@ export async function GET(
   const { data: task, error } = await db
     .from('pep_tasks')
     .select(`
-      id, title, description, status, priority, assigned_to, assigned_by, delegated_to, due_date, completed_at, verified_by, verified_at, created_at, updated_at,
+      id, title, description, status, priority, assigned_to, assigned_by, delegated_to, due_date, completed_at, verified_by, verified_at, verification_rating, created_at, updated_at,
       assignee:pep_users!pep_tasks_assigned_to_fkey(id, name, email, role),
       assigner:pep_users!pep_tasks_assigned_by_fkey(id, name, email, role),
       delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
@@ -57,12 +58,54 @@ export async function GET(
     }
   }
 
+  // Fetch verifications for this task
+  const { data: verifications } = await db
+    .from('pep_verifications')
+    .select('id, task_id, verifier_id, verifier_role, rating, comment_id, created_at')
+    .eq('task_id', id);
+
+  // Resolve verifier names
+  let enrichedVerifications: Array<Record<string, unknown>> = [];
+  if (verifications && verifications.length > 0) {
+    const verifierIds = [...new Set(verifications.map((v: { verifier_id: string }) => v.verifier_id))];
+    const { data: verifierUsers } = await db
+      .from('pep_users')
+      .select('id, name, email')
+      .in('id', verifierIds);
+    const verifierMap = new Map(
+      (verifierUsers || []).map((u: { id: string; name: string | null; email: string }) => [
+        u.id,
+        formatDisplayName(u.name, u.email),
+      ])
+    );
+    enrichedVerifications = verifications.map((v: Record<string, unknown>) => ({
+      ...v,
+      verifier_name: verifierMap.get(v.verifier_id as string) || 'Unknown',
+    }));
+  }
+
+  // Determine if viewer is the worker (should not see ratings)
+  const isWorker =
+    (t.delegated_to && t.delegated_to === user.id) ||
+    (!t.delegated_to && t.assigned_to === user.id);
+
+  // Strip ratings from verifications if viewer is the worker
+  if (isWorker) {
+    enrichedVerifications = enrichedVerifications.map((v) => ({
+      ...v,
+      rating: null,
+    }));
+  }
+
   // Flatten joins
   const result = {
     ...t,
     assignee: Array.isArray(t.assignee) ? (t.assignee as Record<string, unknown>[])[0] : t.assignee,
     assigner: Array.isArray(t.assigner) ? (t.assigner as Record<string, unknown>[])[0] : t.assigner,
     delegate: Array.isArray(t.delegate) ? (t.delegate as Record<string, unknown>[])[0] : t.delegate,
+    verifications: enrichedVerifications,
+    // Strip overall rating from worker
+    verification_rating: isWorker ? null : t.verification_rating,
   };
 
   return NextResponse.json(result);
@@ -156,36 +199,126 @@ export async function PATCH(
       }
     }
 
-    updates.status = body.status;
-    activityDetails.from = currentTask.status;
-    activityDetails.to = body.status;
-
     if (body.status === 'completed') {
+      updates.status = body.status;
       updates.completed_at = new Date().toISOString();
-    }
-    if (body.status === 'verified') {
-      updates.verified_by = user.id;
-      updates.verified_at = new Date().toISOString();
+      activityDetails.from = currentTask.status;
+      activityDetails.to = body.status;
+    } else if (body.status === 'verified') {
+      // --- Multi-verification flow ---
+      const rating = body.verification_rating;
+      if (rating == null || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return NextResponse.json(
+          { error: 'A star rating (1-5) is required to verify a task' },
+          { status: 400 }
+        );
+      }
+      if (rating <= 3 && !body.verification_comment?.trim()) {
+        return NextResponse.json(
+          { error: 'A comment is required for ratings of 3 stars or below' },
+          { status: 400 }
+        );
+      }
 
-      // Optional verification comment
+      // Fetch existing verifications
+      const { data: existingVerifications } = await db
+        .from('pep_verifications')
+        .select('verifier_role')
+        .eq('task_id', id);
+
+      const requirements = getVerificationRequirements(
+        user.role,
+        user.id,
+        currentTask.assigned_by,
+        currentTask.assigned_to,
+        currentTask.delegated_to,
+        existingVerifications || []
+      );
+
+      if (!requirements.canVerify || !requirements.availableSlot) {
+        return NextResponse.json(
+          { error: 'You are not authorized to verify this task, or you have already verified it' },
+          { status: 403 }
+        );
+      }
+
+      // Insert verification comment if provided
+      let commentId: string | null = null;
       if (body.verification_comment?.trim()) {
-        await db.from('pep_comments').insert({
+        const { data: commentRow } = await db.from('pep_comments').insert({
           task_id: id,
           author_id: user.id,
           body: body.verification_comment.trim(),
           context: 'verification',
-        });
-        await db.from('pep_activity_log').insert({
-          task_id: id,
-          user_id: user.id,
-          action: 'commented',
-          details: { context: 'verification' },
-        });
+        }).select('id').single();
+        commentId = commentRow?.id || null;
       }
+
+      // Insert into pep_verifications
+      const { error: verifyInsertErr } = await db.from('pep_verifications').insert({
+        task_id: id,
+        verifier_id: user.id,
+        verifier_role: requirements.availableSlot,
+        rating,
+        comment_id: commentId,
+      });
+
+      if (verifyInsertErr) {
+        console.error('Error inserting verification:', verifyInsertErr);
+        return NextResponse.json({ error: 'Failed to save verification' }, { status: 500 });
+      }
+
+      // Log verification activity
+      await db.from('pep_activity_log').insert({
+        task_id: id,
+        user_id: user.id,
+        action: 'verified',
+        details: { slot: requirements.availableSlot, rating },
+      });
+
+      // Check if all slots are now filled
+      const updatedSlots = [
+        ...(existingVerifications || []),
+        { verifier_role: requirements.availableSlot },
+      ];
+      const fullyVerified = isFullyVerified(
+        currentTask.delegated_to,
+        currentTask.assigned_by,
+        currentTask.assigned_to,
+        updatedSlots
+      );
+
+      if (fullyVerified) {
+        // Compute average rating from all verifications
+        const { data: allVerifications } = await db
+          .from('pep_verifications')
+          .select('rating')
+          .eq('task_id', id);
+        const ratings = (allVerifications || []).map((v: { rating: number }) => v.rating);
+        const avgRating = Math.round(ratings.reduce((a: number, b: number) => a + b, 0) / ratings.length);
+
+        updates.status = 'verified';
+        updates.verified_by = user.id;
+        updates.verified_at = new Date().toISOString();
+        updates.verification_rating = avgRating;
+      } else {
+        // Partial verification — task stays completed, just bump updated_at
+        updates.updated_at = new Date().toISOString();
+      }
+
+      // Flag to skip duplicate activity logging and bypass "no changes" guard
+      body._verificationSubmitted = true;
+    } else {
+      // Non-verification status changes (open, in_progress, etc.)
+      updates.status = body.status;
+      activityDetails.from = currentTask.status;
+      activityDetails.to = body.status;
     }
-    // If reopening from completed, clear completed_at
+
+    // If reopening from completed, clear completed_at and delete partial verifications
     if (body.status === 'in_progress' && currentTask.status === 'completed') {
       updates.completed_at = null;
+      await db.from('pep_verifications').delete().eq('task_id', id);
     }
   }
 
@@ -295,35 +428,41 @@ export async function PATCH(
     }
   }
 
-  if (Object.keys(updates).length === 0) {
+  if (Object.keys(updates).length === 0 && !body._verificationSubmitted) {
     return NextResponse.json({ error: 'No changes to apply' }, { status: 400 });
   }
 
-  updates.updated_at = new Date().toISOString();
+  updates.updated_at = updates.updated_at || new Date().toISOString();
 
-  const { data: updatedTask, error } = await db
-    .from('pep_tasks')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single();
+  let updatedTask = currentTask;
+  if (Object.keys(updates).length > 0) {
+    const { data, error } = await db
+      .from('pep_tasks')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
 
-  if (error) {
-    console.error('Error updating task:', error);
-    return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+    if (error) {
+      console.error('Error updating task:', error);
+      return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+    }
+    updatedTask = data;
   }
 
-  // Log activity
-  const action = body.status && body.status !== currentTask.status
-    ? 'status_changed'
-    : 'updated';
+  // Log activity (skip for verification — it has its own logging above)
+  if (!body._verificationSubmitted) {
+    const action = body.status && body.status !== currentTask.status
+      ? 'status_changed'
+      : 'updated';
 
-  await db.from('pep_activity_log').insert({
-    task_id: id,
-    user_id: user.id,
-    action,
-    details: activityDetails,
-  });
+    await db.from('pep_activity_log').insert({
+      task_id: id,
+      user_id: user.id,
+      action,
+      details: activityDetails,
+    });
+  }
 
   // Push notifications (fire-and-forget)
   // 1. Task completed → notify assigner
@@ -351,6 +490,11 @@ export async function PATCH(
       body: currentTask.title,
       url: `/tasks/${id}`,
     });
+  }
+
+  // Include fullyVerified flag for verification responses
+  if (body._verificationSubmitted) {
+    return NextResponse.json({ ...updatedTask, _fullyVerified: updates.status === 'verified' });
   }
 
   return NextResponse.json(updatedTask);
@@ -400,7 +544,8 @@ export async function DELETE(
     await db.storage.from('pep-attachments').remove(paths);
   }
 
-  // Delete activity log and comments first (in case no CASCADE)
+  // Delete related records first (in case no CASCADE)
+  await db.from('pep_verifications').delete().eq('task_id', id);
   await db.from('pep_activity_log').delete().eq('task_id', id);
   await db.from('pep_comments').delete().eq('task_id', id);
   await db.from('pep_attachments').delete().eq('task_id', id);
