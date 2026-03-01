@@ -27,6 +27,7 @@ async function checkTaskAccess(
     .from('pep_tasks')
     .select('assigned_to, assigned_by, delegated_to')
     .eq('id', taskId)
+    .eq('is_archived', false)
     .single();
 
   if (!task) return { allowed: false, error: 'Task not found', status: 404 };
@@ -117,11 +118,12 @@ export async function POST(
     return NextResponse.json({ error: access.error }, { status: access.status || 403 });
   }
 
-  // Check task isn't verified
+  // Check task isn't verified or archived
   const { data: task } = await db
     .from('pep_tasks')
     .select('status')
     .eq('id', id)
+    .eq('is_archived', false)
     .single();
 
   if (task?.status === 'verified') {

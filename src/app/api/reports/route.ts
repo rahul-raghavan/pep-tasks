@@ -63,10 +63,11 @@ export async function GET(request: Request) {
     visibleUsers = allUsers.filter((u) => visibleSet.has(u.id));
   }
 
-  // Get all tasks created in this month
+  // Get all tasks created in this month (exclude archived)
   const { data: tasks } = await db
     .from('pep_tasks')
     .select('*')
+    .eq('is_archived', false)
     .gte('created_at', monthStartStr)
     .lte('created_at', monthEndStr);
 

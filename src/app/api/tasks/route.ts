@@ -39,6 +39,7 @@ export async function GET(request: Request) {
       assigner:pep_users!pep_tasks_assigned_by_fkey(id, name, email, role),
       delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
     `)
+    .eq('is_archived', false)
     .order('created_at', { ascending: false });
 
   // Role-based filtering: staff sees tasks assigned to them or delegated to them

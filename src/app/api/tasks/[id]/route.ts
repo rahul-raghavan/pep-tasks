@@ -25,6 +25,7 @@ export async function GET(
       delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
     `)
     .eq('id', id)
+    .eq('is_archived', false)
     .single();
 
   if (error || !task) {
@@ -127,6 +128,7 @@ export async function PATCH(
     .from('pep_tasks')
     .select('*')
     .eq('id', id)
+    .eq('is_archived', false)
     .single();
 
   if (!currentTask) {
@@ -519,6 +521,7 @@ export async function DELETE(
     .from('pep_tasks')
     .select('*')
     .eq('id', id)
+    .eq('is_archived', false)
     .single();
 
   if (!task) {

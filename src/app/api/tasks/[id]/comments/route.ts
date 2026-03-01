@@ -14,6 +14,7 @@ async function checkAdminAccess(
     .from('pep_tasks')
     .select('assigned_to, assigned_by')
     .eq('id', taskId)
+    .eq('is_archived', false)
     .single();
 
   if (!task) return { allowed: false, error: 'Task not found' };
@@ -117,6 +118,7 @@ export async function POST(
       .from('pep_tasks')
       .select('assigned_to, delegated_to')
       .eq('id', id)
+      .eq('is_archived', false)
       .single();
     if (!task || (task.assigned_to !== user.id && task.delegated_to !== user.id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

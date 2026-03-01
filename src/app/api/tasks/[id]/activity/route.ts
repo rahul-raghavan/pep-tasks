@@ -20,6 +20,7 @@ export async function GET(
       .from('pep_tasks')
       .select('assigned_to, delegated_to')
       .eq('id', id)
+      .eq('is_archived', false)
       .single();
     if (!task || (task.assigned_to !== user.id && task.delegated_to !== user.id)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -32,6 +33,7 @@ export async function GET(
       .from('pep_tasks')
       .select('assigned_to, assigned_by')
       .eq('id', id)
+      .eq('is_archived', false)
       .single();
 
     if (!task) {

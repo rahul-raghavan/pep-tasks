@@ -42,6 +42,7 @@ export async function GET() {
   let activeQuery = db
     .from('pep_tasks')
     .select('id, due_date')
+    .eq('is_archived', false)
     .in('status', ['open', 'in_progress']);
   if (isStaff) activeQuery = activeQuery.or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
   if (user.role === 'admin' && adminVisibleUserIds) {
@@ -59,6 +60,7 @@ export async function GET() {
       const { data: taskRows } = await db
         .from('pep_tasks')
         .select('id')
+        .eq('is_archived', false)
         .or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`);
       const taskIds = (taskRows || []).map((t: { id: string }) => t.id);
       if (taskIds.length === 0) return [];
@@ -118,6 +120,7 @@ export async function GET() {
       let pvQuery = db
         .from('pep_tasks')
         .select('id, assigned_by, assigned_to, delegated_to')
+        .eq('is_archived', false)
         .eq('status', 'completed');
       if (user.role === 'admin' && adminVisibleUserIds) {
         pvQuery = adminVisibleUserIds.length > 0
@@ -164,6 +167,7 @@ export async function GET() {
   const myTasksPromise = db
     .from('pep_tasks')
     .select('id, title, status, priority, due_date, assigned_to, assigned_by')
+    .eq('is_archived', false)
     .or(`assigned_to.eq.${user.id},delegated_to.eq.${user.id}`)
     .in('status', ['open', 'in_progress', 'completed'])
     .order('due_date', { ascending: true, nullsFirst: false })
@@ -174,6 +178,7 @@ export async function GET() {
     ? db
         .from('pep_tasks')
         .select('id, title, status, priority, due_date, assigned_to, assigned_by, delegated_to')
+        .eq('is_archived', false)
         .or(`and(assigned_by.eq.${user.id},assigned_to.neq.${user.id}),and(assigned_to.eq.${user.id},delegated_to.not.is.null)`)
         .in('status', ['open', 'in_progress', 'completed'])
         .order('due_date', { ascending: true, nullsFirst: false })
@@ -186,6 +191,7 @@ export async function GET() {
     let visibleTaskQuery = db
       .from('pep_tasks')
       .select('id, title')
+      .eq('is_archived', false)
       .in('status', ['open', 'in_progress', 'completed', 'verified']);
 
     if (isStaff) {
