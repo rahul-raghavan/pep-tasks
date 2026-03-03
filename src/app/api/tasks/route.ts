@@ -75,7 +75,9 @@ export async function GET(request: Request) {
   }
 
   // Special views from dashboard cards
-  if (view === 'overdue') {
+  if (view === 'active') {
+    query = query.in('status', ['open', 'in_progress']);
+  } else if (view === 'overdue') {
     const today = getTodayIST();
     query = query.in('status', ['open', 'in_progress']).lt('due_date', today);
   } else if (view === 'due_this_week') {

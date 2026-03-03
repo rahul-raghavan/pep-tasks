@@ -103,13 +103,13 @@ export default function DashboardPage() {
       <div className={`grid grid-cols-1 gap-4 ${isAdmin(user.role) ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
         <Card
           className="cursor-pointer hover:shadow-sm transition-shadow"
-          onClick={() => router.push('/tasks?status=open')}
+          onClick={() => router.push('/tasks?view=active')}
         >
           <CardContent className="pt-6">
             <div className="text-2xl font-bold">
               {stats ? stats.open : '--'}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Open Tasks</p>
+            <p className="text-xs text-muted-foreground mt-1">Active Tasks</p>
           </CardContent>
         </Card>
         <Card

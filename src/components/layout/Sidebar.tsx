@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { PepUser } from '@/types/database';
 import { formatDisplayName } from '@/lib/format-name';
@@ -14,7 +14,17 @@ interface SidebarProps {
 
 export function Sidebar({ user }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const userIsAdmin = isAdmin(user.role);
+
+  // When clicking a nav link for the page you're already on, force a refresh
+  function handleNavClick(e: React.MouseEvent, href: string) {
+    const isActive = pathname === href || pathname.startsWith(`${href}/`);
+    if (isActive && pathname === href) {
+      e.preventDefault();
+      router.refresh();
+    }
+  }
 
   return (
     <div className="flex flex-col w-64 bg-white border-r border-[#E5E4E2] min-h-screen">
@@ -32,6 +42,7 @@ export function Sidebar({ user }: SidebarProps) {
             <Link
               key={item.name}
               href={item.href}
+              onClick={(e) => handleNavClick(e, item.href)}
               className={cn(
                 'flex items-center gap-3 px-3 py-2 rounded text-sm font-medium transition-colors',
                 isActive
@@ -59,6 +70,7 @@ export function Sidebar({ user }: SidebarProps) {
                 <Link
                   key={item.name}
                   href={item.href}
+                  onClick={(e) => handleNavClick(e, item.href)}
                   className={cn(
                     'flex items-center gap-3 px-3 py-2 rounded text-sm font-medium transition-colors',
                     isActive

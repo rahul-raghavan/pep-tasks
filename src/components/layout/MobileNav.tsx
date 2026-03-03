@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { PepUser } from '@/types/database';
 import { isAdmin } from '@/lib/permissions';
@@ -13,9 +13,17 @@ interface BottomTabsProps {
 
 export function BottomTabs({ user }: BottomTabsProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const userIsAdmin = isAdmin(user.role);
 
   const tabs = userIsAdmin ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS;
+
+  function handleTabClick(e: React.MouseEvent, href: string) {
+    if (pathname === href) {
+      e.preventDefault();
+      router.refresh();
+    }
+  }
 
   return (
     <nav className="fixed bottom-0 inset-x-0 z-40 bg-white border-t border-[#E5E4E2] lg:hidden pb-[env(safe-area-inset-bottom)]">
@@ -26,6 +34,7 @@ export function BottomTabs({ user }: BottomTabsProps) {
             <Link
               key={item.name}
               href={item.href}
+              onClick={(e) => handleTabClick(e, item.href)}
               className={cn(
                 'flex-1 flex flex-col items-center justify-center gap-1 text-xs font-medium transition-colors',
                 isActive

@@ -98,6 +98,9 @@ export default function TasksPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl pep-heading">Tasks</h1>
+          {viewParam === 'active' && (
+            <p className="text-sm text-[#5BB8D6] mt-1">Showing open &amp; in-progress tasks</p>
+          )}
           {viewParam === 'overdue' && (
             <p className="text-sm text-[#D4705A] mt-1">Showing overdue tasks</p>
           )}
