@@ -40,20 +40,21 @@ export async function GET(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Hierarchy check: admins can't access super-admin tasks
-    const roleIds = [task.assigned_to, task.assigned_by].filter(Boolean);
-    if (roleIds.length > 0) {
-      const { data: relatedUsers } = await db
-        .from('pep_users')
-        .select('id, role')
-        .in('id', roleIds);
-      if (relatedUsers?.some((u: { role: string }) => u.role === 'super_admin')) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-      }
-    }
-
-    // Center check: skip if task involves me directly
+    // Skip checks if task involves this admin directly
     if (task.assigned_to !== user.id && task.assigned_by !== user.id) {
+      // Hierarchy check: admins can't access tasks assigned TO super-admins
+      if (task.assigned_to) {
+        const { data: assigneeUser } = await db
+          .from('pep_users')
+          .select('role')
+          .eq('id', task.assigned_to)
+          .single();
+        if (assigneeUser?.role === 'super_admin') {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      }
+
+      // Center check
       const centerUserIds = await getCenterUserIds(db, user.id);
       if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

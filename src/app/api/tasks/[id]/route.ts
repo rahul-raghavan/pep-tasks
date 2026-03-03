@@ -40,18 +40,19 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  // Admins can't see tasks assigned to/by super-admins (unless they ARE super-admin)
+  // Admins: block access to tasks assigned TO super-admins,
+  // but allow tasks assigned to themselves even if assigner is super-admin
   if (user.role === 'admin') {
-    const rawAssignee = t.assignee;
-    const rawAssigner = t.assigner;
-    const assigneeRole = Array.isArray(rawAssignee) ? (rawAssignee[0] as Record<string, unknown>)?.role : (rawAssignee as Record<string, unknown> | null)?.role;
-    const assignerRole = Array.isArray(rawAssigner) ? (rawAssigner[0] as Record<string, unknown>)?.role : (rawAssigner as Record<string, unknown> | null)?.role;
-    if (assigneeRole === 'super_admin' || assignerRole === 'super_admin') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
+    const taskInvolvesMe = t.assigned_to === user.id || t.assigned_by === user.id;
 
-    // Center visibility check: skip if task involves me directly
-    if (t.assigned_to !== user.id && t.assigned_by !== user.id) {
+    if (!taskInvolvesMe) {
+      const rawAssignee = t.assignee;
+      const assigneeRole = Array.isArray(rawAssignee) ? (rawAssignee[0] as Record<string, unknown>)?.role : (rawAssignee as Record<string, unknown> | null)?.role;
+      if (assigneeRole === 'super_admin') {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+
+      // Center visibility check
       const centerUserIds = await getCenterUserIds(db, user.id);
       if (!t.assigned_to || !centerUserIds.includes(t.assigned_to as string)) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -145,23 +146,25 @@ export async function PATCH(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  // Admins can't update tasks assigned to/by super-admins
+  // Admins: block modification of tasks assigned TO super-admins,
+  // but allow tasks assigned to themselves even if assigner is super-admin
   if (user.role === 'admin') {
-    // Look up assignee and assigner roles
-    const roleIds = [currentTask.assigned_to, currentTask.assigned_by].filter(Boolean);
-    if (roleIds.length > 0) {
-      const { data: relatedUsers } = await db
-        .from('pep_users')
-        .select('id, role')
-        .in('id', roleIds);
-      const hasSuperAdmin = relatedUsers?.some((u: { role: string }) => u.role === 'super_admin');
-      if (hasSuperAdmin) {
-        return NextResponse.json({ error: 'Admins cannot modify super-admin tasks' }, { status: 403 });
-      }
-    }
+    const taskInvolvesMe = currentTask.assigned_to === user.id || currentTask.assigned_by === user.id;
 
-    // Center visibility check: skip if task involves me directly
-    if (currentTask.assigned_to !== user.id && currentTask.assigned_by !== user.id) {
+    if (!taskInvolvesMe) {
+      // Check if assignee is super_admin
+      if (currentTask.assigned_to) {
+        const { data: assigneeUser } = await db
+          .from('pep_users')
+          .select('role')
+          .eq('id', currentTask.assigned_to)
+          .single();
+        if (assigneeUser?.role === 'super_admin') {
+          return NextResponse.json({ error: 'Admins cannot modify super-admin tasks' }, { status: 403 });
+        }
+      }
+
+      // Center visibility check
       const centerUserIds = await getCenterUserIds(db, user.id);
       if (!currentTask.assigned_to || !centerUserIds.includes(currentTask.assigned_to)) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

@@ -103,12 +103,14 @@ export async function GET(request: Request) {
     delegate: Array.isArray(t.delegate) ? t.delegate[0] : t.delegate,
   }));
 
-  // Admins can't see tasks involving super-admins
+  // Admins can't see tasks assigned TO super-admins, but CAN see tasks
+  // assigned to themselves even if the assigner is a super-admin
   if (user.role === 'admin') {
     tasks = tasks.filter((t: Record<string, unknown>) => {
+      // Always allow tasks that involve this admin directly
+      if (t.assigned_to === user.id || t.assigned_by === user.id) return true;
       const assignee = t.assignee as { role?: string } | null;
-      const assigner = t.assigner as { role?: string } | null;
-      return assignee?.role !== 'super_admin' && assigner?.role !== 'super_admin';
+      return assignee?.role !== 'super_admin';
     });
   }
 

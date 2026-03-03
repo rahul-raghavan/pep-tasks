@@ -19,24 +19,27 @@ async function checkAdminAccess(
 
   if (!task) return { allowed: false, error: 'Task not found' };
 
-  // Hierarchy check: admins can't access super-admin tasks
-  const roleIds = [task.assigned_to, task.assigned_by].filter(Boolean);
-  if (roleIds.length > 0) {
-    const { data: relatedUsers } = await db
+  // Skip checks if task involves this admin directly
+  if (task.assigned_to === userId || task.assigned_by === userId) {
+    return { allowed: true };
+  }
+
+  // Hierarchy check: admins can't access tasks assigned TO super-admins
+  if (task.assigned_to) {
+    const { data: assigneeUser } = await db
       .from('pep_users')
-      .select('id, role')
-      .in('id', roleIds);
-    if (relatedUsers?.some((u: { role: string }) => u.role === 'super_admin')) {
+      .select('role')
+      .eq('id', task.assigned_to)
+      .single();
+    if (assigneeUser?.role === 'super_admin') {
       return { allowed: false, error: 'Forbidden' };
     }
   }
 
-  // Center check: skip if task involves me directly
-  if (task.assigned_to !== userId && task.assigned_by !== userId) {
-    const centerUserIds = await getCenterUserIds(db, userId);
-    if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
-      return { allowed: false, error: 'Forbidden' };
-    }
+  // Center check
+  const centerUserIds = await getCenterUserIds(db, userId);
+  if (!task.assigned_to || !centerUserIds.includes(task.assigned_to)) {
+    return { allowed: false, error: 'Forbidden' };
   }
 
   return { allowed: true };
