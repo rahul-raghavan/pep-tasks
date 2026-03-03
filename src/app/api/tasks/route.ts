@@ -18,6 +18,8 @@ export async function GET(request: Request) {
   const assignee = searchParams.get('assignee');
   const view = searchParams.get('view');
   const center = searchParams.get('center');
+  const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '50', 10) || 50, 1), 100);
+  const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10) || 0, 0);
 
   const db = createServiceRoleClient();
 
@@ -31,14 +33,17 @@ export async function GET(request: Request) {
     centerUserIds = (centerUsers || []).map((cu: { user_id: string }) => cu.user_id);
   }
 
+  // Admins need assignee.role for super_admin post-filter
+  const isAdminUser = isAdmin(user.role);
+  const assigneeFields = isAdminUser ? 'id, name, email, role' : 'id, name, email';
+
   let query = db
     .from('pep_tasks')
     .select(`
-      id, title, description, status, priority, assigned_to, assigned_by, delegated_to, due_date, completed_at, verified_at, created_at, updated_at,
-      assignee:pep_users!pep_tasks_assigned_to_fkey(id, name, email, role),
-      assigner:pep_users!pep_tasks_assigned_by_fkey(id, name, email, role),
+      id, title, status, priority, assigned_to, assigned_by, delegated_to, due_date,
+      assignee:pep_users!pep_tasks_assigned_to_fkey(${assigneeFields}),
       delegate:pep_users!pep_tasks_delegated_to_fkey(id, name, email)
-    `)
+    `, { count: 'exact' })
     .eq('is_archived', false)
     .order('created_at', { ascending: false });
 
@@ -88,7 +93,10 @@ export async function GET(request: Request) {
     query = query.in('status', ['open', 'in_progress']).gte('due_date', weekStart).lte('due_date', weekEnd);
   }
 
-  const { data, error } = await query;
+  // Apply pagination
+  query = query.range(offset, offset + limit - 1);
+
+  const { data, error, count } = await query;
 
   if (error) {
     console.error('Error fetching tasks:', error);
@@ -99,7 +107,6 @@ export async function GET(request: Request) {
   let tasks = (data || []).map((t: Record<string, unknown>) => ({
     ...t,
     assignee: Array.isArray(t.assignee) ? t.assignee[0] : t.assignee,
-    assigner: Array.isArray(t.assigner) ? t.assigner[0] : t.assigner,
     delegate: Array.isArray(t.delegate) ? t.delegate[0] : t.delegate,
   }));
 
@@ -114,7 +121,7 @@ export async function GET(request: Request) {
     });
   }
 
-  return NextResponse.json(tasks);
+  return NextResponse.json({ tasks, total: count ?? tasks.length, limit, offset });
 }
 
 // POST /api/tasks — create a task (admin+ only)

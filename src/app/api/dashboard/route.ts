@@ -21,6 +21,20 @@ export async function GET() {
 
   const isStaff = user.role === 'staff';
 
+  // Pre-fetch all users once — used throughout for name resolution and role checks
+  const { data: allUsers } = await db.from('pep_users').select('id, name, email, role');
+  const userNameMap = new Map<string, string>(
+    (allUsers || []).map((u: { id: string; name: string | null; email: string }) => [
+      u.id,
+      formatDisplayName(u.name, u.email),
+    ])
+  );
+  const superAdminIds = new Set<string>(
+    (allUsers || [])
+      .filter((u: { role: string }) => u.role === 'super_admin')
+      .map((u: { id: string }) => u.id)
+  );
+
   // For admin: compute visible user IDs (center members minus super_admins)
   let adminVisibleUserIds: string[] | null = null;
   if (user.role === 'admin') {
@@ -29,13 +43,7 @@ export async function GET() {
       ? [...new Set([...centerUserIds, user.id])]
       : [user.id];
 
-    // Exclude super_admin users from visible set
-    const { data: superAdmins } = await db
-      .from('pep_users')
-      .select('id')
-      .eq('role', 'super_admin');
-    const excludeIds = new Set((superAdmins || []).map((u: { id: string }) => u.id));
-    adminVisibleUserIds = allCandidates.filter((id) => !excludeIds.has(id));
+    adminVisibleUserIds = allCandidates.filter((id) => !superAdminIds.has(id));
   }
 
   // Single query for all active tasks — count open, due this week, and overdue in JS
@@ -74,7 +82,7 @@ export async function GET() {
         .limit(10);
 
       if (!logs || logs.length === 0) return [];
-      return await enrichTimeline(db, logs);
+      return await enrichTimeline(db, logs, userNameMap);
     })();
   } else {
     // Admin/super_admin: fetch recent status changes, then post-filter
@@ -88,7 +96,7 @@ export async function GET() {
 
       if (!logs || logs.length === 0) return [];
 
-      const items = await enrichTimeline(db, logs);
+      const items = await enrichTimeline(db, logs, userNameMap);
 
       if (user.role === 'super_admin') return items.slice(0, 10);
 
@@ -225,25 +233,11 @@ export async function GET() {
 
     if (!comments || comments.length === 0) return [];
 
-    // Resolve author names
-    const authorIds = [...new Set(comments.map((c: { author_id: string }) => c.author_id))];
-    const { data: authors } = await db
-      .from('pep_users')
-      .select('id, name, email')
-      .in('id', authorIds);
-
-    const authorMap = new Map(
-      (authors || []).map((u: { id: string; name: string | null; email: string }) => [
-        u.id,
-        formatDisplayName(u.name, u.email),
-      ])
-    );
-
     return comments.map((c: { id: string; task_id: string; author_id: string; body: string; context: string | null; created_at: string }) => ({
       id: c.id,
       task_id: c.task_id,
       task_title: taskTitleMap.get(c.task_id) || 'Unknown Task',
-      author_name: authorMap.get(c.author_id) || 'Unknown',
+      author_name: userNameMap.get(c.author_id) || 'Unknown',
       body: c.body,
       context: c.context,
       created_at: c.created_at,
@@ -271,28 +265,13 @@ export async function GET() {
     }
   }
 
-  // For "Assigned by You", resolve assignee and delegate names
+  // For "Assigned by You", resolve assignee and delegate names using pre-fetched map
   let assignedByMe: Array<Record<string, unknown>> = [];
   if (assignedByMeRes.data && assignedByMeRes.data.length > 0) {
-    const userIdsToResolve = [
-      ...assignedByMeRes.data.map((t: { assigned_to: string | null }) => t.assigned_to),
-      ...assignedByMeRes.data.map((t: { delegated_to: string | null }) => t.delegated_to),
-    ].filter(Boolean);
-    const uniqueIds = [...new Set(userIdsToResolve)] as string[];
-    let nameMap = new Map<string, string>();
-    if (uniqueIds.length > 0) {
-      const { data: resolvedUsers } = await db
-        .from('pep_users')
-        .select('id, name, email')
-        .in('id', uniqueIds);
-      nameMap = new Map(
-        (resolvedUsers || []).map((u: { id: string; name: string | null; email: string }) => [u.id, formatDisplayName(u.name, u.email)])
-      );
-    }
     assignedByMe = assignedByMeRes.data.map((t: Record<string, unknown>) => ({
       ...t,
-      assigned_to_name: nameMap.get(t.assigned_to as string) || null,
-      delegated_to_name: t.delegated_to ? (nameMap.get(t.delegated_to as string) || null) : null,
+      assigned_to_name: userNameMap.get(t.assigned_to as string) || null,
+      delegated_to_name: t.delegated_to ? (userNameMap.get(t.delegated_to as string) || null) : null,
     }));
   }
 
@@ -319,40 +298,18 @@ interface RawLog {
 
 async function enrichTimeline(
   db: ReturnType<typeof createServiceRoleClient>,
-  logs: RawLog[]
+  logs: RawLog[],
+  userNameMap: Map<string, string>
 ): Promise<TimelineItem[]> {
   const taskIds = [...new Set(logs.map((l) => l.task_id))];
-  const userIds = [...new Set(logs.map((l) => l.user_id))];
 
-  const [{ data: tasks }, { data: users }] = await Promise.all([
-    db.from('pep_tasks').select('id, title, assigned_to, assigned_by, due_date').in('id', taskIds),
-    db.from('pep_users').select('id, name, email').in('id', userIds),
-  ]);
+  // Only need task data — user names come from pre-fetched userNameMap
+  const { data: tasks } = await db
+    .from('pep_tasks')
+    .select('id, title, assigned_to, assigned_by, due_date')
+    .in('id', taskIds);
 
   const taskMap = new Map((tasks || []).map((t: { id: string; title: string; assigned_to: string | null; assigned_by: string | null; due_date: string | null }) => [t.id, t]));
-  const userMap = new Map(
-    (users || []).map((u: { id: string; name: string | null; email: string }) => [
-      u.id,
-      formatDisplayName(u.name, u.email),
-    ])
-  );
-
-  // Collect assignee IDs from tasks that aren't already in userMap
-  const assigneeIds = [...new Set(
-    (tasks || [])
-      .map((t: { assigned_to: string | null }) => t.assigned_to)
-      .filter((id): id is string => !!id && !userMap.has(id))
-  )];
-
-  if (assigneeIds.length > 0) {
-    const { data: assigneeUsers } = await db
-      .from('pep_users')
-      .select('id, name, email')
-      .in('id', assigneeIds);
-    (assigneeUsers || []).forEach((u: { id: string; name: string | null; email: string }) => {
-      userMap.set(u.id, formatDisplayName(u.name, u.email));
-    });
-  }
 
   return logs.map((l) => {
     const taskData = taskMap.get(l.task_id);
@@ -360,12 +317,12 @@ async function enrichTimeline(
       id: l.id,
       task_id: l.task_id,
       task_title: taskData?.title || (l.details?.title as string) || 'Unknown Task',
-      actor_name: userMap.get(l.user_id) || 'Unknown',
+      actor_name: userNameMap.get(l.user_id) || 'Unknown',
       action: l.action as TimelineItem['action'],
       from_status: (l.details?.from as TaskStatus) || null,
       to_status: (l.details?.to as TaskStatus) || null,
       assigned_to_id: taskData?.assigned_to || null,
-      assigned_to_name: taskData?.assigned_to ? (userMap.get(taskData.assigned_to) || null) : null,
+      assigned_to_name: taskData?.assigned_to ? (userNameMap.get(taskData.assigned_to) || null) : null,
       assigned_by_id: taskData?.assigned_by || null,
       due_date: taskData?.due_date || null,
       delegated_to_name: (l.details?.to_name as string) || null,

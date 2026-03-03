@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin, canDelegate, canCreatorEdit, getVerificationRequirements } from '@/lib/permissions';
@@ -96,6 +96,10 @@ export default function TaskDetailPage() {
   const [verificationRating, setVerificationRating] = useState<number>(0);
   const [verificationComment, setVerificationComment] = useState('');
 
+  // Tabs state — activity loads lazily on first click
+  const [activeTab, setActiveTab] = useState('comments');
+  const activityLoadedRef = useRef(false);
+
   // Attachments state
   const [attachments, setAttachments] = useState<PepAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -160,7 +164,6 @@ export default function TaskDetailPage() {
   useEffect(() => {
     if (!loading && task) {
       fetchComments();
-      fetchActivity();
       fetchAttachments();
       // Fetch users for delegation and edit dropdowns (admin+ only)
       if (isAdmin(user.role)) {
@@ -179,7 +182,15 @@ export default function TaskDetailPage() {
         }
       }
     }
-  }, [loading, task, fetchComments, fetchActivity, fetchAttachments, user.role]);
+  }, [loading, task, fetchComments, fetchAttachments, user.role]);
+
+  // Lazy-load activity tab on first click
+  useEffect(() => {
+    if (activeTab === 'activity' && !activityLoadedRef.current) {
+      activityLoadedRef.current = true;
+      fetchActivity();
+    }
+  }, [activeTab, fetchActivity]);
 
   async function updateStatus(newStatus: TaskStatus) {
     setUpdating(true);
@@ -1018,7 +1029,7 @@ export default function TaskDetailPage() {
       </Card>
 
       {/* Comments & Activity Tabs */}
-      <Tabs defaultValue="comments">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="comments">
             Comments ({comments.length})

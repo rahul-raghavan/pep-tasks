@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -58,6 +58,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const lastFetchRef = useRef<number>(0);
 
   const fetchDashboard = useCallback(async () => {
     setRefreshing(true);
@@ -65,6 +66,7 @@ export default function DashboardPage() {
       const res = await fetch('/api/dashboard');
       const data = await res.json();
       setStats(data);
+      lastFetchRef.current = Date.now();
     } catch {}
     setRefreshing(false);
   }, []);
@@ -73,9 +75,13 @@ export default function DashboardPage() {
     fetchDashboard();
   }, [fetchDashboard]);
 
-  // Auto-refresh when user switches back to this tab
+  // Auto-refresh when user switches back to this tab (throttled to 30s)
   useEffect(() => {
-    const onFocus = () => fetchDashboard();
+    const onFocus = () => {
+      if (Date.now() - lastFetchRef.current > 30_000) {
+        fetchDashboard();
+      }
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [fetchDashboard]);

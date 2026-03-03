@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useUserContext } from '@/components/layout/DashboardLayout';
 import { isAdmin } from '@/lib/permissions';
@@ -35,6 +35,10 @@ export default function TasksPage() {
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
   const [centerFilter, setCenterFilter] = useState<string>('all');
+  const lastFetchRef = useRef<number>(0);
+  const [total, setTotal] = useState<number>(0);
+  const [offset, setOffset] = useState<number>(0);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     if (isAdmin(user.role)) {
@@ -59,30 +63,45 @@ export default function TasksPage() {
     }
   }, [user.role]);
 
-  const fetchTasks = useCallback(async () => {
-    setLoading(true);
+  const fetchTasks = useCallback(async (fetchOffset = 0) => {
+    if (fetchOffset === 0) setLoading(true); else setLoadingMore(true);
     const params = new URLSearchParams();
     if (viewParam) params.set('view', viewParam);
     if (statusFilter !== 'all') params.set('status', statusFilter);
     if (priorityFilter !== 'all') params.set('priority', priorityFilter);
     if (assigneeFilter !== 'all') params.set('assignee', assigneeFilter);
     if (centerFilter !== 'all') params.set('center', centerFilter);
+    params.set('limit', '50');
+    params.set('offset', String(fetchOffset));
 
     const res = await fetch(`/api/tasks?${params}`);
     if (res.ok) {
       const data = await res.json();
-      setTasks(data);
+      if (fetchOffset === 0) {
+        setTasks(data.tasks);
+      } else {
+        setTasks((prev) => [...prev, ...data.tasks]);
+      }
+      setTotal(data.total);
+      setOffset(fetchOffset + data.tasks.length);
+      lastFetchRef.current = Date.now();
     }
-    setLoading(false);
+    if (fetchOffset === 0) setLoading(false); else setLoadingMore(false);
   }, [statusFilter, priorityFilter, assigneeFilter, centerFilter, viewParam]);
 
   useEffect(() => {
-    fetchTasks();
+    setOffset(0);
+    fetchTasks(0);
   }, [fetchTasks]);
 
-  // Auto-refresh when user switches back to this tab
+  // Auto-refresh when user switches back to this tab (throttled to 30s)
   useEffect(() => {
-    const onFocus = () => fetchTasks();
+    const onFocus = () => {
+      if (Date.now() - lastFetchRef.current > 30_000) {
+        setOffset(0);
+        fetchTasks(0);
+      }
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [fetchTasks]);
@@ -112,7 +131,7 @@ export default function TasksPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => fetchTasks()}
+            onClick={() => { setOffset(0); fetchTasks(0); }}
             disabled={loading}
             title="Refresh tasks"
           >
@@ -256,6 +275,17 @@ export default function TasksPage() {
               </div>
             </div>
           ))}
+          {tasks.length < total && (
+            <div className="flex justify-center pt-4">
+              <Button
+                variant="outline"
+                onClick={() => fetchTasks(offset)}
+                disabled={loadingMore}
+              >
+                {loadingMore ? 'Loading...' : `Load More (${tasks.length} of ${total})`}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
